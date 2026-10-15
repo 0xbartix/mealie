@@ -118,6 +118,7 @@
 </template>
 
 <script setup lang="ts">
+import { uuid4 } from "~/composables/use-utils";
 import type { DietMealSlot, DietPerson, DietSettingsUpdate, MealType } from "~/lib/api/types/diet";
 
 const modelValue = defineModel<DietSettingsUpdate>({ required: true });
@@ -158,7 +159,7 @@ function setMealCount(count: number) {
 
 function addPerson() {
   const persons = modelValue.value.persons ?? [];
-  persons.push({ id: crypto.randomUUID().replaceAll("-", ""), name: "", kcal: 2000, protein: 125, fat: 67, carbs: 225, active: true });
+  persons.push({ id: uuid4().replaceAll("-", ""), name: "", kcal: 2000, protein: 125, fat: 67, carbs: 225, active: true });
   modelValue.value.persons = persons;
 }
 

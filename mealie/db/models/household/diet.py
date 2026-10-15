@@ -12,9 +12,11 @@ class HouseholdDietSettings(SqlAlchemyBase, BaseMixins):
     __tablename__ = "household_diet_settings"
 
     id: FilterableColumn[GUID] = mapped_column(GUID, primary_key=True, default=GUID.generate)
-    group_id: FilterableColumn[GUID] = mapped_column(GUID, sa.ForeignKey("groups.id"), nullable=False, index=True)
+    group_id: FilterableColumn[GUID] = mapped_column(
+        GUID, sa.ForeignKey("groups.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     household_id: FilterableColumn[GUID] = mapped_column(
-        GUID, sa.ForeignKey("households.id"), nullable=False, index=True, unique=True
+        GUID, sa.ForeignKey("households.id", ondelete="CASCADE"), nullable=False, index=True, unique=True
     )
 
     persons: Mapped[list] = mapped_column(sa.JSON, nullable=False, default=list)

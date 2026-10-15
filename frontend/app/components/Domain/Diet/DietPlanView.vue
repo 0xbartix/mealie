@@ -281,7 +281,9 @@ async function save() {
   alert.success(i18n.t("diet.saved-to-calendar", { created: data.created }));
 }
 
-watch([startDate, endDate], () => {
+// batch and slot indexes of an old preview mean something else after the settings change
+watch([startDate, endDate, () => props.settings], () => {
+  excluded.value = {};
   preview.value = null;
   savedCount.value = null;
 });

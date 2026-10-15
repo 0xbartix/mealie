@@ -92,6 +92,13 @@ def test_locked_and_excluded_slots():
     assert swapped.batches[0].slots[2].recipe.id == base.batches[0].slots[2].recipe.id
 
 
+def test_pins_that_do_not_fit_the_slot_are_ignored():
+    planner = DietPlanner(PERSONS, SLOTS, balanced_pool(), {SUN}, seed=3)
+    # a dinner recipe pinned into the breakfast slot (e.g. after the meal setup changed)
+    plan = planner.plan(MON, MON, locked={0: {0: "dinner-1"}})
+    assert plan.batches[0].slots[0].recipe.meal_types == frozenset([MealType.breakfast])
+
+
 def test_missing_and_scarce_candidates_are_reported():
     pool = [c for c in balanced_pool() if c.meal_types != frozenset([MealType.dinner])]
     pool = [c for c in pool if not (MealType.breakfast in c.meal_types and c.id != "breakfast-0")]

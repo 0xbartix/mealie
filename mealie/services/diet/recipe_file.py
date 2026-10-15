@@ -19,6 +19,7 @@ holding the per-serving nutrition and the meal types the recipe fits.
     1. ...
 """
 
+import math
 import re
 import unicodedata
 from dataclasses import dataclass, field
@@ -77,8 +78,12 @@ def fold(text: str) -> str:
 
 _UNIT_LOOKUP = {alias: canonical for canonical, aliases in UNIT_ALIASES.items() for alias in aliases}
 
-_QTY = r"\d+(?:[.,]\d+)?(?:\s*/\s*\d+)?|[½¼¾⅓⅔]"
-_INGREDIENT_RE = re.compile(rf"^(?P<qty>(?:\d+\s+)?(?:{_QTY}))\s*(?P<rest>.*)$")
+_FRACTION_CHARS = "½¼¾⅓⅔"
+_THOUSANDS = r"\d{1,3}(?:[ \u00a0]\d{3})+(?:[.,]\d+)?"  # "1 500"
+# one amount: "1 500", "1 1/2", "1½", "1/2", "0,5", "½"
+_AMOUNT = rf"(?:{_THOUSANDS}|\d+\s+\d+/\d+|\d+\s*[{_FRACTION_CHARS}]|\d+/\d+|\d+(?:[.,]\d+)?|[{_FRACTION_CHARS}])"
+# an amount, optionally a range ("1-2" -> the upper value) or a multiplication ("2 x 100" -> 200)
+_INGREDIENT_RE = re.compile(rf"^(?P<a>{_AMOUNT})(?:\s*(?P<op>[-–—x×])\s*(?P<b>{_AMOUNT}))?(?![\d/.,])\s*(?P<rest>.*)$")
 _LIST_ITEM_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(?P<text>.*)$")
 
 
@@ -117,16 +122,18 @@ class RecipeFile:
 
 
 def parse_quantity(raw: str) -> float:
-    raw = raw.strip().replace(",", ".")
+    raw = raw.strip()
+    if re.fullmatch(_THOUSANDS, raw):
+        return float(re.sub(r"[ \u00a0]", "", raw).replace(",", "."))
     total = 0.0
-    for part in raw.split():
+    for part in re.findall(rf"\d+/\d+|\d+(?:[.,]\d+)?|[{_FRACTION_CHARS}]", raw):
         if part in UNICODE_FRACTIONS:
             total += UNICODE_FRACTIONS[part]
         elif "/" in part:
             num, den = part.split("/")
             total += float(num) / float(den)
         else:
-            total += float(part)
+            total += float(part.replace(",", "."))
     return total
 
 
@@ -140,7 +147,10 @@ def parse_ingredient(text: str) -> IngredientLine | None:
         return None
 
     try:
-        quantity = parse_quantity(match.group("qty"))
+        quantity = parse_quantity(match.group("a"))
+        if match.group("op"):
+            second = parse_quantity(match.group("b"))
+            quantity = quantity * second if match.group("op") in "x×" else max(quantity, second)
     except ValueError, ZeroDivisionError:
         return None
 
@@ -154,7 +164,7 @@ def parse_ingredient(text: str) -> IngredientLine | None:
 
     food, _, note = rest.partition(",")
     food = food.strip()
-    if not food:
+    if not food or not food[0].isalpha():
         return None
 
     return IngredientLine(quantity=quantity, unit=unit, food=food, note=note.strip(), original_text=original)
@@ -170,6 +180,9 @@ def _number(meta: dict, key: str, errors: list[str], required: bool = True) -> f
         number = float(str(value).replace(",", ".").split()[0])
     except ValueError, IndexError:
         errors.append(f"pole „{key}” musi być liczbą (jest: {value!r})")
+        return None
+    if not math.isfinite(number):
+        errors.append(f"pole „{key}” musi być zwykłą liczbą (jest: {value!r})")
         return None
     if number < 0:
         errors.append(f"pole „{key}” nie może być ujemne")

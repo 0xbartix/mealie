@@ -2,7 +2,7 @@ import io
 import random
 import re
 import zipfile
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import sqlalchemy as sa
 from pydantic import UUID4
@@ -10,9 +10,9 @@ from slugify import slugify
 from sqlalchemy.orm import lazyload, selectinload
 
 from mealie.db.models.household.diet import HouseholdDietSettings
-from mealie.db.models.household.mealplan import GroupMealPlan
 from mealie.db.models.recipe import RecipeModel
 from mealie.db.models.recipe.ingredient import IngredientFoodModel, IngredientUnitModel
+from mealie.db.models.users import User
 from mealie.lang.providers import Translator
 from mealie.repos.repository_factory import AllRepositories
 from mealie.repos.repository_generic import HouseholdRepositoryGeneric
@@ -33,7 +33,7 @@ from mealie.schema.diet.diet import (
     DietSettingsUpdate,
 )
 from mealie.schema.household.household import HouseholdInDB
-from mealie.schema.meal_plan.new_meal import PlanEntryType, SavePlanEntry
+from mealie.schema.meal_plan.new_meal import PlanEntryType, ReadPlanEntry, SavePlanEntry
 from mealie.schema.recipe.recipe import Recipe, RecipeCategory, RecipeTag
 from mealie.schema.recipe.recipe_category import CategorySave, TagSave
 from mealie.schema.recipe.recipe_ingredient import (
@@ -46,6 +46,7 @@ from mealie.schema.recipe.recipe_ingredient import (
 from mealie.schema.recipe.recipe_nutrition import Nutrition
 from mealie.schema.recipe.recipe_settings import RecipeSettings
 from mealie.schema.recipe.recipe_step import RecipeStep
+from mealie.schema.response.pagination import PaginationQuery
 from mealie.schema.user.user import PrivateUser
 from mealie.services._base_service import BaseService
 from mealie.services.diet.planner import Candidate, DietPlanner, Person, Plan, Slot
@@ -85,6 +86,9 @@ UNIT_PLURALS = {
 ABBREVIATED_UNITS = {"g", "dag", "kg", "ml", "l", "szt", "opak"}
 
 MAX_IMPORT_FILES = 500
+PRUNE_AFTER_DAYS = 120
+# marks recipes created by the file importer; only those may be updated by a later import
+IMPORT_MARKER = "plan-diety-import"
 MAX_FILE_BYTES = 512 * 1024
 
 
@@ -111,6 +115,17 @@ def portions_word(value: float) -> str:
     if n % 10 in (2, 3, 4) and n % 100 not in (12, 13, 14):
         return "porcje"
     return "porcji"
+
+
+def entry_fingerprint(entry: ReadPlanEntry) -> dict:
+    """What the planner remembers about an entry it wrote, to recognise it later."""
+    return {
+        "id": entry.id,
+        "date": entry.date.isoformat(),
+        "type": entry.entry_type.value,
+        "recipe": str(entry.recipe_id) if entry.recipe_id else None,
+        "title": entry.title,
+    }
 
 
 def _fmt(value: float) -> str:
@@ -267,79 +282,82 @@ class DietService(BaseService):
         plan, _, settings = self._plan(request)
         names = {p.id: p.name for p in settings.persons}
         meals = self.repos.meals
+        tracked = [t for t in self._settings_model().generated_entry_ids or [] if isinstance(t, dict)]
 
-        # replace only what the planner wrote before in this period; manual entries stay
-        previous_ids: list[int] = list(self._settings_model().generated_entry_ids or [])
-        stale = (
-            self.repos.session.execute(
-                sa.select(GroupMealPlan.id).where(
-                    GroupMealPlan.id.in_(previous_ids),
-                    GroupMealPlan.date >= request.start_date,
-                    GroupMealPlan.date <= request.end_date,
+        # Replace only what the planner wrote itself. SQLite reuses the ids of deleted rows, so an id alone
+        # may point at a manual entry added later: an entry counts as ours only while it still looks as we wrote it.
+        in_period = meals.page_all(
+            PaginationQuery(
+                page=1,
+                per_page=-1,
+                query_filter=f"date >= {request.start_date} AND date <= {request.end_date}",
+            )
+        ).items
+        current = {e.id: entry_fingerprint(e) for e in in_period}
+        stale = {t["id"] for t in tracked if current.get(t["id"]) == t}
+        removed = 0
+        created: list[dict] = []
+        try:
+            for entry_id in sorted(stale):
+                meals.delete(entry_id)
+                stale.discard(entry_id)
+                removed += 1
+
+            for batch in plan.batches:
+                cooked = [slot for slot in batch.slots if slot.recipe is not None]
+                if not cooked:
+                    continue
+                days = "1 dzień" if batch.days == 1 else f"{batch.days} dni"
+                dishes = " · ".join(
+                    f"{slot.recipe.name}: {format_portions(total)} {portions_word(total)}"
+                    for slot in cooked
+                    if slot.recipe is not None and (total := slot.portions_per_day * batch.days)
                 )
-            )
-            .scalars()
-            .all()
-            if previous_ids
-            else []
-        )
-        for entry_id in stale:
-            meals.delete(entry_id)
-
-        created: list[int] = []
-        for batch in plan.batches:
-            cooked = [slot for slot in batch.slots if slot.recipe is not None]
-            if not cooked:
-                continue
-            days = "1 dzień" if batch.days == 1 else f"{batch.days} dni"
-            dishes = " · ".join(
-                f"{slot.recipe.name}: {format_portions(total)} {portions_word(total)}"
-                for slot in cooked
-                if slot.recipe is not None and (total := slot.portions_per_day * batch.days)
-            )
-            note = meals.create(
-                SavePlanEntry(
-                    date=batch.start,
-                    entry_type=MEAL_TO_ENTRY_TYPE[cooked[0].meal_type],
-                    title=f"Dzień gotowania – na {days}",
-                    text=dishes,
-                    group_id=self.group_id,
-                    user_id=self.user.id,
-                )
-            )
-            created.append(note.id)
-
-            for offset in range(batch.days):
-                day = batch.start + timedelta(days=offset)
-                for slot in cooked:
-                    assert slot.recipe is not None
-                    entry = meals.create(
-                        SavePlanEntry(
-                            date=day,
-                            entry_type=MEAL_TO_ENTRY_TYPE[slot.meal_type],
-                            text=" · ".join(
-                                f"{names.get(p.person_id, '?')}: {format_portions(p.portions)} "
-                                f"{portions_word(p.portions)} ({round(p.kcal)} kcal)"
-                                for p in slot.portions
-                            ),
-                            recipe_id=slot.recipe.id,
-                            recipe_scale=slot.portions_per_day / slot.recipe.servings,
-                            group_id=self.group_id,
-                            user_id=self.user.id,
-                        )
+                note = meals.create(
+                    SavePlanEntry(
+                        date=batch.start,
+                        entry_type=MEAL_TO_ENTRY_TYPE[cooked[0].meal_type],
+                        title=f"Dzień gotowania – na {days}",
+                        text=dishes,
+                        group_id=self.group_id,
+                        user_id=self.user.id,
                     )
-                    created.append(entry.id)
+                )
+                created.append(entry_fingerprint(note))
 
-        stale_set = set(stale)
-        still_there = set(
-            self.repos.session.execute(
-                sa.select(GroupMealPlan.id).where(GroupMealPlan.id.in_([i for i in previous_ids if i not in stale_set]))
-            ).scalars()
-        )
-        model = self._settings_model()
-        model.generated_entry_ids = sorted(still_there) + created
-        self.repos.session.commit()
-        return DietPlanSaveResult(created=len(created), removed=len(stale))
+                for offset in range(batch.days):
+                    day = batch.start + timedelta(days=offset)
+                    for slot in cooked:
+                        assert slot.recipe is not None
+                        entry = meals.create(
+                            SavePlanEntry(
+                                date=day,
+                                entry_type=MEAL_TO_ENTRY_TYPE[slot.meal_type],
+                                text=" · ".join(
+                                    f"{names.get(p.person_id, '?')}: {format_portions(p.portions)} "
+                                    f"{portions_word(p.portions)} ({round(p.kcal)} kcal)"
+                                    for p in slot.portions
+                                ),
+                                recipe_id=slot.recipe.id,
+                                recipe_scale=slot.portions_per_day / slot.recipe.servings,
+                                group_id=self.group_id,
+                                user_id=self.user.id,
+                            )
+                        )
+                        created.append(entry_fingerprint(entry))
+        except Exception:
+            self.repos.session.rollback()
+            raise
+        finally:
+            # record progress even after a failure, so entries written so far are still replaced next time
+            deleted = {t["id"] for t in tracked if current.get(t["id"]) == t} - stale
+            horizon = (datetime.now(UTC).date() - timedelta(days=PRUNE_AFTER_DAYS)).isoformat()
+            kept = [t for t in tracked if t["id"] not in deleted and t["date"] >= horizon]
+            model = self._settings_model()
+            model.generated_entry_ids = kept + created
+            self.repos.session.commit()
+
+        return DietPlanSaveResult(created=len(created), removed=removed)
 
     def _settings_model(self) -> HouseholdDietSettings:
         self.get_settings()
@@ -412,16 +430,31 @@ class _RecipeFileImporter:
             data = parse_recipe_file(text)
         except RecipeFileError as e:
             return DietImportResult(file_name=file_name, status=DietImportStatus.error, errors=e.errors)
+        except Exception as e:
+            return DietImportResult(
+                file_name=file_name, status=DietImportStatus.error, errors=[f"nie udało się odczytać pliku: {e}"]
+            )
 
         try:
             existing = self._find_existing(data.name)
+            if existing and IMPORT_MARKER not in (self.recipe_service.get_one(existing).extras or {}):
+                return DietImportResult(
+                    file_name=file_name,
+                    status=DietImportStatus.error,
+                    recipe_name=data.name,
+                    recipe_slug=existing,
+                    errors=[
+                        f"masz już przepis „{data.name}” dodany inaczej niż z pliku – "
+                        "zmień nazwę w pliku albo usuń tamten przepis"
+                    ],
+                )
             if existing:
                 recipe = self.recipe_service.get_one(existing)
                 self._apply(recipe, data)
                 saved = self.recipe_service.update_one(existing, recipe)
                 status = DietImportStatus.updated
             else:
-                recipe = Recipe(name=data.name)
+                recipe = Recipe(name=data.name, extras={IMPORT_MARKER: "tak"})
                 self._apply(recipe, data)
                 prefs = self.household.preferences
                 recipe.settings = RecipeSettings(
@@ -451,9 +484,12 @@ class _RecipeFileImporter:
         )
 
     def _find_existing(self, name: str) -> str | None:
+        """Slug of this household's recipe with the same name (other households' recipes are never touched)."""
         wanted = name.strip().casefold()
         rows = self.repos.session.execute(
-            sa.select(RecipeModel.slug, RecipeModel.name).where(RecipeModel.group_id == self.group_id)
+            sa.select(RecipeModel.slug, RecipeModel.name)
+            .join(User, RecipeModel.user_id == User.id)
+            .where(RecipeModel.group_id == self.group_id, User.household_id == self.household.id)
         )
         for slug, recipe_name in rows:
             if (recipe_name or "").strip().casefold() == wanted:
@@ -464,7 +500,8 @@ class _RecipeFileImporter:
         recipe.name = data.name
         recipe.description = data.description
         recipe.recipe_servings = data.servings
-        recipe.org_url = data.source
+        if data.source:
+            recipe.org_url = data.source
         if data.time_minutes:
             recipe.total_time = None
             recipe.total_time_seconds = data.time_minutes * 60

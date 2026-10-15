@@ -69,6 +69,13 @@ def test_parses_complete_file():
         ("2 łyżki oliwa", (2, "łyżka", "oliwa")),
         ("3 ząbki czosnek", (3, "ząbek", "czosnek")),
         ("1 / 4 opakowania tofu", (0.25, "opak", "tofu")),
+        ("1 500 ml woda", (1500, "ml", "woda")),
+        ("1 000 g mąka", (1000, "g", "mąka")),
+        ("1½ szklanki mąka", (1.5, "szklanka", "mąka")),
+        ("1-2 ząbki czosnek", (2, "ząbek", "czosnek")),
+        ("2–3 łyżki oliwa", (3, "łyżka", "oliwa")),
+        ("2 x 100 g jogurt", (200, "g", "jogurt")),
+        ("2 xylitol", (2, None, "xylitol")),
     ],
 )
 def test_ingredient_variants(line, expected):
@@ -77,7 +84,7 @@ def test_ingredient_variants(line, expected):
     assert (parsed.quantity, parsed.unit, parsed.food) == expected
 
 
-@pytest.mark.parametrize("line", ["sól do smaku", "g ryż", "100 g", ""])
+@pytest.mark.parametrize("line", ["sól do smaku", "g ryż", "100 g", "", "100 g 5% jogurt", "1 - jajko"])
 def test_ingredient_rejects_lines_without_quantity_or_food(line):
     assert parse_ingredient(line) is None
 
@@ -122,6 +129,12 @@ def test_warns_when_kcal_does_not_match_macros():
     recipe = parse_recipe_file(text)
     assert len(recipe.warnings) == 1
     assert "nie zgadza się z makro" in recipe.warnings[0]
+
+
+@pytest.mark.parametrize("value", [".nan", ".inf", "-.inf"])
+def test_rejects_non_finite_numbers(value):
+    with pytest.raises(RecipeFileError, match="zwykłą liczbą"):
+        parse_recipe_file(VALID.replace("czas: 15", f"czas: {value}"))
 
 
 def test_accepts_comma_decimals_and_single_meal_string():

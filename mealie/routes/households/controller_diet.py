@@ -48,8 +48,8 @@ class DietController(BaseUserController):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, detail=ErrorResponse.respond(message=str(e))) from e
 
     @router.post("/import", response_model=DietImportReport)
-    async def import_recipe_files(self, files: list[UploadFile] = File(...)):
-        contents = [(f.filename or "plik", await f.read()) for f in files]
+    def import_recipe_files(self, files: list[UploadFile] = File(...)):
+        contents = [(f.filename or "plik", f.file.read()) for f in files]
         try:
             return self.service.import_files(contents)
         except ValueError as e:

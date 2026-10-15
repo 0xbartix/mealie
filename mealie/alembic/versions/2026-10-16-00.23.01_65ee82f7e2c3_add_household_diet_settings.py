@@ -31,14 +31,8 @@ def upgrade():
         sa.Column("generated_entry_ids", sa.JSON(), nullable=False),
         sa.Column("created_at", mealie.db.migration_types.NaiveDateTime(), nullable=True),
         sa.Column("update_at", mealie.db.migration_types.NaiveDateTime(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["group_id"],
-            ["groups.id"],
-        ),
-        sa.ForeignKeyConstraint(
-            ["household_id"],
-            ["households.id"],
-        ),
+        sa.ForeignKeyConstraint(["group_id"], ["groups.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(["household_id"], ["households.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
     )
     with op.batch_alter_table("household_diet_settings", schema=None) as batch_op:

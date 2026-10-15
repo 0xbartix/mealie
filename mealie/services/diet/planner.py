@@ -247,7 +247,7 @@ class DietPlanner:
             options: list[list[Candidate | None]] = []
             for slot_index, slot_options in enumerate(slot_candidates):
                 pinned = locked.get(index, {}).get(slot_index)
-                if pinned and pinned in by_id:
+                if pinned and pinned in by_id and self.slots[slot_index].meal_type in by_id[pinned].meal_types:
                     options.append([by_id[pinned]])
                     continue
                 skip = set(excluded.get(index, {}).get(slot_index, []))

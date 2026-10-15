@@ -56,7 +56,7 @@ def seed_recipes(api_client: TestClient, user: TestUser) -> None:
             files[f"{meal}-{i}.md"] = balanced(f"{meal} {i} {user.user_id}", meal, base + 40 * i).encode()
     response = upload(api_client, user, files)
     assert response.status_code == 200, response.text
-    assert all(r["status"] == "created" for r in response.json()["results"])
+    assert all(r["status"] in ("created", "updated") for r in response.json()["results"])
 
 
 def configure(api_client: TestClient, user: TestUser) -> dict:
@@ -252,3 +252,53 @@ def test_preview_rejects_bad_period(api_client: TestClient, unique_user: TestUse
         PREVIEW, json={"startDate": "2026-10-01", "endDate": "2026-12-31"}, headers=unique_user.token
     )
     assert response.status_code == 422
+
+
+def test_resave_keeps_manual_entry_that_reuses_a_deleted_id(api_client: TestClient, unique_user: TestUser):
+    seed_recipes(api_client, unique_user)
+    configure(api_client, unique_user)
+    period = {"startDate": "2026-11-02", "endDate": "2026-11-04"}
+    preview = api_client.post(PREVIEW, json={**period, "seed": 1}, headers=unique_user.token).json()
+    locked = {str(b["index"]): {str(s["slotIndex"]): s["recipe"]["id"] for s in b["slots"]} for b in preview["batches"]}
+    assert api_client.post(SAVE, json={**period, "locked": locked}, headers=unique_user.token).status_code == 200
+
+    params = {"start_date": "2026-11-02", "end_date": "2026-11-04", "perPage": -1}
+    entries = api_client.get(api_routes.households_mealplans, params=params, headers=unique_user.token).json()["items"]
+    last = max(entries, key=lambda e: e["id"])
+    deleted = api_client.delete(api_routes.households_mealplans_item_id(last["id"]), headers=unique_user.token)
+    assert deleted.status_code == 200
+    manual = api_client.post(
+        api_routes.households_mealplans,
+        json={"date": last["date"], "entryType": last["entryType"], "title": "Moja kolacja"},
+        headers=unique_user.token,
+    ).json()
+
+    assert api_client.post(SAVE, json={**period, "locked": locked}, headers=unique_user.token).status_code == 200
+    entries = api_client.get(api_routes.households_mealplans, params=params, headers=unique_user.token).json()["items"]
+    assert any(e["id"] == manual["id"] and e["title"] == "Moja kolacja" for e in entries)
+
+
+def test_import_never_overwrites_recipes_it_did_not_create(
+    api_client: TestClient, unique_user: TestUser, h2_user: TestUser
+):
+    name = f"Leczo {unique_user.user_id}"
+    response = api_client.post(api_routes.recipes, json={"name": name}, headers=unique_user.token)
+    assert response.status_code == 201
+    slug = response.json()
+
+    # a hand-made recipe with the same name in the same household is left alone
+    result = upload(api_client, unique_user, {"leczo.md": balanced(name, "obiad", 500).encode()}).json()["results"][0]
+    assert result["status"] == "error"
+    assert "dodany inaczej niż z pliku" in result["errors"][0]
+    recipe = api_client.get(api_routes.recipes_slug(slug), headers=unique_user.token).json()
+    assert not (recipe.get("nutrition") or {}).get("calories")
+
+    # another household importing the same name gets its own recipe
+    shared = f"Bigos {unique_user.user_id}"
+    first = upload(api_client, unique_user, {"bigos.md": balanced(shared, "obiad", 600).encode()}).json()["results"][0]
+    second = upload(api_client, h2_user, {"bigos.md": balanced(shared, "obiad", 300).encode()}).json()["results"][0]
+    assert first["status"] == "created"
+    assert second["status"] == "created"
+    assert second["recipeSlug"] != first["recipeSlug"]
+    original = api_client.get(api_routes.recipes_slug(first["recipeSlug"]), headers=unique_user.token).json()
+    assert original["nutrition"]["calories"] == "600"

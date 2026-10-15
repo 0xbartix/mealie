@@ -76,6 +76,7 @@
 
 <script setup lang="ts">
 import { useUserApi } from "~/composables/api";
+import { useCopy } from "~/composables/use-copy";
 import { alert } from "~/composables/use-toast";
 import type { DietImportResult, DietImportStatus } from "~/lib/api/types/diet";
 
@@ -121,9 +122,9 @@ function statusColor(status: DietImportStatus) {
   return status === "error" ? "error" : status === "updated" ? "info" : "success";
 }
 
-async function copyTemplate() {
-  await navigator.clipboard.writeText(template);
-  alert.success(i18n.t("general.copied-to-clipboard"));
+const { copyText } = useCopy();
+function copyTemplate() {
+  copyText(template);
 }
 
 async function importFiles() {
