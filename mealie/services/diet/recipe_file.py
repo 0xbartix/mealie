@@ -141,7 +141,7 @@ def parse_ingredient(text: str) -> IngredientLine | None:
 
     try:
         quantity = parse_quantity(match.group("qty"))
-    except (ValueError, ZeroDivisionError):
+    except ValueError, ZeroDivisionError:
         return None
 
     rest = match.group("rest").strip()
@@ -168,7 +168,7 @@ def _number(meta: dict, key: str, errors: list[str], required: bool = True) -> f
         return None
     try:
         number = float(str(value).replace(",", ".").split()[0])
-    except (ValueError, IndexError):
+    except ValueError, IndexError:
         errors.append(f"pole „{key}” musi być liczbą (jest: {value!r})")
         return None
     if number < 0:
@@ -196,6 +196,89 @@ def _split_front_matter(text: str) -> tuple[str, str, int]:
     raise RecipeFileError(["brak zamykającej linii „---” po nagłówku"])
 
 
+def _meal_types(meta: dict, errors: list[str]) -> list[MealType]:
+    meal_types: list[MealType] = []
+    unknown = False
+    for raw in _as_list(meta.get("posilek")):
+        meal_type = MEAL_TYPE_ALIASES.get(fold(raw))
+        if meal_type is None:
+            unknown = True
+            errors.append(f"nieznany posiłek „{raw}” (dozwolone: sniadanie, obiad, kolacja, przekaska)")
+        elif meal_type not in meal_types:
+            meal_types.append(meal_type)
+    if not meal_types and not unknown:
+        errors.append("brak pola „posilek” (np. posilek: [obiad])")
+    return meal_types
+
+
+def _sections(body: str, body_start: int) -> dict[str, list[tuple[int, str]]]:
+    """Splits the body into: description (before any heading), ingredients, steps and other sections."""
+    sections: dict[str, list[tuple[int, str]]] = {"opis": []}
+    current = "opis"
+    for offset, line in enumerate(body.splitlines()):
+        heading = re.match(r"^\s*##\s+(.*)$", line)
+        if heading:
+            title = fold(heading.group(1).strip())
+            if title.startswith("skladnik"):
+                current = "skladniki"
+            elif title.startswith(("przygotowanie", "sposob", "kroki")):
+                current = "przygotowanie"
+            else:
+                current = "inne"
+            sections.setdefault(current, [])
+            continue
+        sections.setdefault(current, []).append((body_start + offset, line))
+    return sections
+
+
+def _ingredients(sections: dict[str, list[tuple[int, str]]], errors: list[str]) -> list[IngredientLine]:
+    if "skladniki" not in sections:
+        errors.append("brak sekcji „## Składniki”")
+        return []
+
+    ingredients: list[IngredientLine] = []
+    pending_title: str | None = None
+    invalid = False
+    for line_no, line in sections["skladniki"]:
+        if not line.strip():
+            continue
+        sub = re.match(r"^\s*###\s+(.*)$", line)
+        if sub:
+            pending_title = sub.group(1).strip()
+            continue
+        item = _LIST_ITEM_RE.match(line)
+        content = item.group("text") if item else line
+        parsed = parse_ingredient(content)
+        if parsed is None:
+            invalid = True
+            errors.append(
+                f"linia {line_no}: nie rozumiem składnika „{content.strip()}” – "
+                "zapisz jako „ilość jednostka produkt”, np. „100 g ryż”"
+            )
+            continue
+        parsed.title, pending_title = pending_title, None
+        ingredients.append(parsed)
+
+    if not ingredients and not invalid:
+        errors.append("sekcja „## Składniki” jest pusta")
+    return ingredients
+
+
+def _steps(lines: list[tuple[int, str]]) -> list[str]:
+    steps: list[str] = []
+    for _, line in lines:
+        if not line.strip():
+            continue
+        item = _LIST_ITEM_RE.match(line)
+        if item:
+            steps.append(item.group("text").strip())
+        elif steps:
+            steps[-1] = f"{steps[-1]} {line.strip()}"
+        else:
+            steps.append(line.strip())
+    return steps
+
+
 def parse_recipe_file(text: str) -> RecipeFile:
     text = text.lstrip("﻿")
     front, body, body_start = _split_front_matter(text)
@@ -221,76 +304,16 @@ def parse_recipe_file(text: str) -> RecipeFile:
     if servings is not None and servings <= 0:
         errors.append("pole „porcje” musi być większe od zera")
 
-    meal_types: list[MealType] = []
-    for raw in _as_list(meta.get("posilek")):
-        meal_type = MEAL_TYPE_ALIASES.get(fold(raw))
-        if meal_type is None:
-            errors.append(f"nieznany posiłek „{raw}” (dozwolone: sniadanie, obiad, kolacja, przekaska)")
-        elif meal_type not in meal_types:
-            meal_types.append(meal_type)
-    if not meal_types and not any("posiłek" in e for e in errors):
-        errors.append("brak pola „posilek” (np. posilek: [obiad])")
-
+    meal_types = _meal_types(meta, errors)
     kcal = _number(meta, "kcal", errors)
     protein = _number(meta, "bialko", errors)
     fat = _number(meta, "tluszcz", errors)
     carbs = _number(meta, "weglowodany", errors)
     time = _number(meta, "czas", errors, required=False)
 
-    # Body: optional description, then "## Składniki" and "## Przygotowanie" sections
-    sections: dict[str, list[tuple[int, str]]] = {"opis": []}
-    current = "opis"
-    for offset, line in enumerate(body.splitlines()):
-        heading = re.match(r"^\s*##\s+(.*)$", line)
-        if heading and not line.lstrip().startswith("###"):
-            title = fold(heading.group(1).strip())
-            if title.startswith("skladnik"):
-                current = "skladniki"
-            elif title.startswith("przygotowanie") or title.startswith("sposob") or title.startswith("kroki"):
-                current = "przygotowanie"
-            else:
-                current = "inne"
-            sections.setdefault(current, [])
-            continue
-        sections.setdefault(current, []).append((body_start + offset, line))
-
-    ingredients: list[IngredientLine] = []
-    pending_title: str | None = None
-    for line_no, line in sections.get("skladniki", []):
-        if not line.strip():
-            continue
-        sub = re.match(r"^\s*###\s+(.*)$", line)
-        if sub:
-            pending_title = sub.group(1).strip()
-            continue
-        item = _LIST_ITEM_RE.match(line)
-        content = item.group("text") if item else line
-        parsed = parse_ingredient(content)
-        if parsed is None:
-            errors.append(
-                f"linia {line_no}: nie rozumiem składnika „{content.strip()}” – "
-                "zapisz jako „ilość jednostka produkt”, np. „100 g ryż”"
-            )
-            continue
-        parsed.title, pending_title = pending_title, None
-        ingredients.append(parsed)
-    if "skladniki" not in sections:
-        errors.append("brak sekcji „## Składniki”")
-    elif not ingredients and not any("składnik" in e for e in errors):
-        errors.append("sekcja „## Składniki” jest pusta")
-
-    steps: list[str] = []
-    for _, line in sections.get("przygotowanie", []):
-        if not line.strip():
-            continue
-        item = _LIST_ITEM_RE.match(line)
-        if item:
-            steps.append(item.group("text").strip())
-        elif steps:
-            steps[-1] = f"{steps[-1]} {line.strip()}"
-        else:
-            steps.append(line.strip())
-
+    sections = _sections(body, body_start)
+    ingredients = _ingredients(sections, errors)
+    steps = _steps(sections.get("przygotowanie", []))
     description = "\n".join(line for _, line in sections["opis"]).strip()
 
     if errors:

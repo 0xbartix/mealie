@@ -264,9 +264,7 @@ class DietPlanner:
                         portions.append(Portion(person.id, p, p * recipe.kcal))
                 slots.append(SlotPlan(slot_index, slot.meal_type, recipe, portions, len(slot_candidates[slot_index])))
 
-            plan.batches.append(
-                Batch(index, batch_start, batch_end, slots, _totals(self.persons, self.slots, recipes))
-            )
+            plan.batches.append(Batch(index, batch_start, batch_end, slots, _totals(self.persons, self.slots, recipes)))
             previous = {r.id for r in recipes if r is not None}
             for r in recipes:
                 if r is not None:

@@ -112,7 +112,9 @@ def test_missing_front_matter_and_sections():
         parse_recipe_file("## Składniki\n- 1 g sól\n")
 
     with pytest.raises(RecipeFileError, match="Składniki"):
-        parse_recipe_file("---\nnazwa: X\nporcje: 1\nposilek: obiad\nkcal: 1\nbialko: 0\ntluszcz: 0\nweglowodany: 0\n---\n")
+        parse_recipe_file(
+            "---\nnazwa: X\nporcje: 1\nposilek: obiad\nkcal: 1\nbialko: 0\ntluszcz: 0\nweglowodany: 0\n---\n"
+        )
 
 
 def test_warns_when_kcal_does_not_match_macros():

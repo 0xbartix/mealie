@@ -10,7 +10,9 @@ WED, SUN = 2, 6
 
 
 def candidate(i: int, meal: MealType, kcal: float, p: float, f: float, c: float, servings: float = 4) -> Candidate:
-    return Candidate(f"{meal.value}-{i}", f"{meal.value} {i}", f"{meal.value}-{i}", servings, kcal, p, f, c, frozenset([meal]))
+    return Candidate(
+        f"{meal.value}-{i}", f"{meal.value} {i}", f"{meal.value}-{i}", servings, kcal, p, f, c, frozenset([meal])
+    )
 
 
 def balanced_pool() -> list[Candidate]:
