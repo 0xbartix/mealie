@@ -132,8 +132,10 @@ def test_import_creates_updates_and_reports_errors(api_client: TestClient, uniqu
     assert [c["name"] for c in recipe["recipeCategory"]] == ["Obiad"]
     assert [t["name"] for t in recipe["tags"]] == ["test-diety"]
     assert recipe["totalTimeSeconds"] == 1200
+    assert recipe["totalTime"] is None
     assert [i["food"]["name"] for i in recipe["recipeIngredient"]] == ["ryż biały", "oliwa", "cebula"]
     assert [i["unit"]["name"] for i in recipe["recipeIngredient"]] == ["g", "łyżka", "szt"]
+    assert recipe["recipeIngredient"][1]["unit"]["pluralName"] == "łyżki"
     assert recipe["recipeIngredient"][1]["note"] == "extra virgin"
     assert [s["text"] for s in recipe["recipeInstructions"]] == ["Ugotuj ryż.", "Podsmaż cebulę."]
 
@@ -195,14 +197,14 @@ def test_preview_swap_and_save(api_client: TestClient, unique_user: TestUser):
     save = {**period, "locked": final_locked}
     response = api_client.post(SAVE, json=save, headers=unique_user.token)
     assert response.status_code == 200, response.text
-    assert response.json() == {"created": 21, "removed": 0}
+    assert response.json() == {"created": 24, "removed": 0}  # 21 meals + 3 cooking-day notes
 
     entries = api_client.get(
         api_routes.households_mealplans,
         params={"start_date": "2026-10-19", "end_date": "2026-10-25", "perPage": -1},
         headers=unique_user.token,
     ).json()["items"]
-    assert len(entries) == 22
+    assert len(entries) == 25
     assert any(e["title"] == "Jabłko" for e in entries)
 
     batch = swapped["batches"][1]  # Wed..Sat
@@ -210,21 +212,21 @@ def test_preview_swap_and_save(api_client: TestClient, unique_user: TestUser):
     wednesday_lunch = next(e for e in entries if e["date"] == "2026-10-21" and e["entryType"] == "lunch")
     assert wednesday_lunch["recipeId"] == lunch["recipe"]["id"]
     assert wednesday_lunch["recipeScale"] == lunch["portionsPerDay"] / lunch["recipe"]["servings"]
-    assert wednesday_lunch["text"].startswith("Ugotuj ")
-    assert "na 4 dni" in wednesday_lunch["text"]
     assert "Bartek:" in wednesday_lunch["text"] and "Ania:" in wednesday_lunch["text"]
-    thursday_lunch = next(e for e in entries if e["date"] == "2026-10-22" and e["entryType"] == "lunch")
-    assert not thursday_lunch["text"].startswith("Ugotuj")
+    note = next(e for e in entries if e["date"] == "2026-10-21" and e["recipeId"] is None)
+    assert note["title"] == "Dzień gotowania – na 4 dni"
+    assert f"{lunch['recipe']['name']}: " in note["text"]
+    assert not any(e["recipeId"] is None and e["date"] == "2026-10-22" for e in entries)
 
     # saving again replaces only the planner's own entries
     response = api_client.post(SAVE, json=save, headers=unique_user.token)
-    assert response.json() == {"created": 21, "removed": 21}
+    assert response.json() == {"created": 24, "removed": 24}
     entries = api_client.get(
         api_routes.households_mealplans,
         params={"start_date": "2026-10-19", "end_date": "2026-10-25", "perPage": -1},
         headers=unique_user.token,
     ).json()["items"]
-    assert len(entries) == 22
+    assert len(entries) == 25
 
 
 def test_preview_requires_persons(api_client: TestClient, unique_user: TestUser):

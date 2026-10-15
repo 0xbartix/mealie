@@ -243,6 +243,12 @@ const topLinks = computed<SideBarLink[]>(() => [
     restricted: true,
   },
   {
+    icon: $globals.icons.potSteam,
+    title: i18n.t("diet.diet-plan"),
+    to: "/household/diet",
+    restricted: true,
+  },
+  {
     icon: $globals.icons.formatListCheck,
     title: i18n.t("shopping-list.shopping-lists"),
     to: "/shopping-lists",

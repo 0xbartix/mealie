@@ -234,12 +234,12 @@ class DietPlanner:
         plan = Plan(batches=[])
 
         slot_candidates = [self._slot_candidates(s) for s in self.slots]
-        for slot, options in zip(self.slots, slot_candidates, strict=True):
-            needed = len(split_batches(start, end, self.cooking_weekdays))
-            if not options:
+        needed = len(split_batches(start, end, self.cooking_weekdays))
+        for slot, available in zip(self.slots, slot_candidates, strict=True):
+            if not available:
                 plan.warnings.append(f"no-candidates:{slot.meal_type.value}")
-            elif len(options) < min(needed, 3):
-                plan.warnings.append(f"few-candidates:{slot.meal_type.value}:{len(options)}")
+            elif len(available) < min(needed, 3):
+                plan.warnings.append(f"few-candidates:{slot.meal_type.value}:{len(available)}")
 
         previous: set[str] = set()
         used: dict[str, int] = {}

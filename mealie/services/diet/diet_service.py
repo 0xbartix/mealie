@@ -69,6 +69,18 @@ MEAL_TO_ENTRY_TYPE: dict[MealType, PlanEntryType] = {
     MealType.dinner: PlanEntryType.dinner,
     MealType.snack: PlanEntryType.snack,
 }
+UNIT_PLURALS = {
+    "łyżka": "łyżki",
+    "łyżeczka": "łyżeczki",
+    "szklanka": "szklanki",
+    "puszka": "puszki",
+    "ząbek": "ząbki",
+    "plaster": "plastry",
+    "garść": "garście",
+    "szczypta": "szczypty",
+    "pęczek": "pęczki",
+    "kostka": "kostki",
+}
 # units shown by their short form in ingredient lists
 ABBREVIATED_UNITS = {"g", "dag", "kg", "ml", "l", "szt", "opak"}
 
@@ -276,26 +288,40 @@ class DietService(BaseService):
 
         created: list[int] = []
         for batch in plan.batches:
+            cooked = [slot for slot in batch.slots if slot.recipe is not None]
+            if not cooked:
+                continue
+            days = "1 dzień" if batch.days == 1 else f"{batch.days} dni"
+            dishes = " · ".join(
+                f"{slot.recipe.name}: {format_portions(total)} {portions_word(total)}"
+                for slot in cooked
+                if slot.recipe is not None and (total := slot.portions_per_day * batch.days)
+            )
+            note = meals.create(
+                SavePlanEntry(
+                    date=batch.start,
+                    entry_type=MEAL_TO_ENTRY_TYPE[cooked[0].meal_type],
+                    title=f"Dzień gotowania – na {days}",
+                    text=dishes,
+                    group_id=self.group_id,
+                    user_id=self.user.id,
+                )
+            )
+            created.append(note.id)
+
             for offset in range(batch.days):
                 day = batch.start + timedelta(days=offset)
-                for slot in batch.slots:
-                    if slot.recipe is None:
-                        continue
-                    people = " · ".join(
-                        f"{names.get(p.person_id, '?')}: {format_portions(p.portions)} "
-                        f"{portions_word(p.portions)} ({round(p.kcal)} kcal)"
-                        for p in slot.portions
-                    )
-                    text = people
-                    if offset == 0:
-                        total = slot.portions_per_day * batch.days
-                        days = "1 dzień" if batch.days == 1 else f"{batch.days} dni"
-                        text = f"Ugotuj {format_portions(total)} {portions_word(total)} na {days}. {people}"
+                for slot in cooked:
+                    assert slot.recipe is not None
                     entry = meals.create(
                         SavePlanEntry(
                             date=day,
                             entry_type=MEAL_TO_ENTRY_TYPE[slot.meal_type],
-                            text=text,
+                            text=" · ".join(
+                                f"{names.get(p.person_id, '?')}: {format_portions(p.portions)} "
+                                f"{portions_word(p.portions)} ({round(p.kcal)} kcal)"
+                                for p in slot.portions
+                            ),
                             recipe_id=slot.recipe.id,
                             recipe_scale=slot.portions_per_day / slot.recipe.servings,
                             group_id=self.group_id,
@@ -353,11 +379,11 @@ class DietService(BaseService):
 
         importer = _RecipeFileImporter(self.repos, self.user, self.household, self.translator)
         results = []
-        for name, content, error in documents:
-            if error or content is None:
+        for name, document, error in documents:
+            if error or document is None:
                 results.append(DietImportResult(file_name=name, status=DietImportStatus.error, errors=[error or ""]))
                 continue
-            results.append(importer.import_one(name, content))
+            results.append(importer.import_one(name, document))
         return DietImportReport(results=results)
 
 
@@ -440,7 +466,7 @@ class _RecipeFileImporter:
         recipe.recipe_servings = data.servings
         recipe.org_url = data.source
         if data.time_minutes:
-            recipe.total_time = f"{data.time_minutes} min"
+            recipe.total_time = None
             recipe.total_time_seconds = data.time_minutes * 60
 
         meal_slugs = set(CATEGORY_SLUG_TO_MEAL)
@@ -500,6 +526,7 @@ class _RecipeFileImporter:
             unit = self.repos.ingredient_units.create(
                 SaveIngredientUnit(
                     name=name,
+                    plural_name=UNIT_PLURALS.get(name),
                     abbreviation=name if name in ABBREVIATED_UNITS else "",
                     use_abbreviation=name in ABBREVIATED_UNITS,
                     group_id=self.group_id,

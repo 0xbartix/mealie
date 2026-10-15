@@ -83,6 +83,11 @@ const subpages = computed<MenuItem[]>(() => [
     hide: !group.value?.aiProviderSettings?.aiEnabled,
   },
   {
+    icon: $globals.icons.upload,
+    text: i18n.t("diet.import-from-files"),
+    value: "files",
+  },
+  {
     icon: $globals.icons.edit,
     text: i18n.t("recipe.create-recipe"),
     value: "new",
