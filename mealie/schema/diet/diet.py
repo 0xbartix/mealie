@@ -34,10 +34,19 @@ def default_meal_slots() -> list[DietMealSlot]:
     ]
 
 
+class DietShoppingListMode(StrEnum):
+    period = "period"  # one list for the whole plan
+    batch = "batch"  # one list per cooking
+    none = "none"
+
+
 class DietSettingsUpdate(MealieModel):
     persons: list[DietPerson] = []
     cooking_days: list[int] = [6]  # 0 = Monday ... 6 = Sunday
     meal_slots: list[DietMealSlot] = Field(default_factory=default_meal_slots)
+    # food cooked on a cooking day is eaten from the next day (e.g. cooking in the evening)
+    eat_next_day: bool = False
+    shopping_list: DietShoppingListMode = DietShoppingListMode.period
 
     @field_validator("cooking_days")
     @classmethod
@@ -122,6 +131,7 @@ class DietPlanTotals(MealieModel):
 
 class DietPlanBatch(MealieModel):
     index: int
+    cook_date: date
     start_date: date
     end_date: date
     days: int
@@ -135,9 +145,15 @@ class DietPlanPreview(MealieModel):
     warnings: list[str] = []
 
 
+class DietShoppingListRef(MealieModel):
+    id: UUID4
+    name: str
+
+
 class DietPlanSaveResult(MealieModel):
     created: int
     removed: int
+    shopping_lists: list[DietShoppingListRef] = []
 
 
 class DietImportStatus(StrEnum):

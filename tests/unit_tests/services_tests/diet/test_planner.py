@@ -44,6 +44,21 @@ def test_split_batches_follows_cooking_days():
     ]
 
 
+def test_split_batches_eating_from_the_next_day():
+    # cooking on Wednesday and Sunday evenings: that food is eaten from Thursday and from Monday
+    plan = DietPlanner(PERSONS, SLOTS, balanced_pool(), {WED, SUN}, seed=1, eat_next_day=True).plan(
+        MON, date(2026, 11, 1)
+    )
+    assert [(b.cook_date, b.start, b.end) for b in plan.batches] == [
+        (date(2026, 10, 18), date(2026, 10, 19), date(2026, 10, 21)),  # cooked the Sunday before the period
+        (date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 25)),  # Wed -> Thu..Sun
+        (date(2026, 10, 25), date(2026, 10, 26), date(2026, 10, 28)),  # Sun -> Mon..Wed
+        (date(2026, 10, 28), date(2026, 10, 29), date(2026, 11, 1)),  # Wed -> Thu..Sun
+    ]
+    same_day = DietPlanner(PERSONS, SLOTS, balanced_pool(), {WED, SUN}, seed=1).plan(MON, date(2026, 10, 25))
+    assert all(b.cook_date == b.start for b in same_day.batches)
+
+
 def test_split_batches_single_day_period():
     assert split_batches(MON, MON, {SUN}) == [(MON, MON)]
 

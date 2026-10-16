@@ -85,8 +85,9 @@ class Totals:
 @dataclass
 class Batch:
     index: int
-    start: date
-    end: date
+    start: date  # first day eaten
+    end: date  # last day eaten
+    cook_date: date
     slots: list[SlotPlan]
     totals: list[Totals]
 
@@ -101,13 +102,19 @@ class Plan:
     warnings: list[str] = field(default_factory=list)
 
 
-def split_batches(start: date, end: date, cooking_weekdays: set[int]) -> list[tuple[date, date]]:
-    """Splits [start, end] into batches; weekday numbers follow `date.weekday()` (0 = Monday)."""
+def split_batches(
+    start: date, end: date, cooking_weekdays: set[int], eat_next_day: bool = False
+) -> list[tuple[date, date]]:
+    """
+    Splits [start, end] into the days eaten from each cooking; weekday numbers follow `date.weekday()`
+    (0 = Monday). With `eat_next_day` food cooked on a cooking day is eaten from the following day.
+    """
+    shift = timedelta(days=1 if eat_next_day else 0)
     batches: list[tuple[date, date]] = []
     batch_start = start
     day = start + timedelta(days=1)
     while day <= end:
-        if day.weekday() in cooking_weekdays:
+        if (day - shift).weekday() in cooking_weekdays:
             batches.append((batch_start, day - timedelta(days=1)))
             batch_start = day
         day += timedelta(days=1)
@@ -159,12 +166,14 @@ class DietPlanner:
         candidates: list[Candidate],
         cooking_weekdays: set[int],
         seed: int = 0,
+        eat_next_day: bool = False,
     ) -> None:
         self.persons = persons
         self.slots = slots
         self.candidates = [c for c in candidates if c.kcal > 0 and c.servings > 0]
         self.cooking_weekdays = cooking_weekdays
         self.seed = seed
+        self.eat_next_day = eat_next_day
 
     def _slot_candidates(self, slot: Slot) -> list[Candidate]:
         return [c for c in self.candidates if slot.meal_type in c.meal_types]
@@ -234,7 +243,8 @@ class DietPlanner:
         plan = Plan(batches=[])
 
         slot_candidates = [self._slot_candidates(s) for s in self.slots]
-        needed = len(split_batches(start, end, self.cooking_weekdays))
+        batch_days = split_batches(start, end, self.cooking_weekdays, self.eat_next_day)
+        needed = len(batch_days)
         for slot, available in zip(self.slots, slot_candidates, strict=True):
             if not available:
                 plan.warnings.append(f"no-candidates:{slot.meal_type.value}")
@@ -243,7 +253,7 @@ class DietPlanner:
 
         previous: set[str] = set()
         used: dict[str, int] = {}
-        for index, (batch_start, batch_end) in enumerate(split_batches(start, end, self.cooking_weekdays)):
+        for index, (batch_start, batch_end) in enumerate(batch_days):
             options: list[list[Candidate | None]] = []
             for slot_index, slot_options in enumerate(slot_candidates):
                 pinned = locked.get(index, {}).get(slot_index)
@@ -264,7 +274,10 @@ class DietPlanner:
                         portions.append(Portion(person.id, p, p * recipe.kcal))
                 slots.append(SlotPlan(slot_index, slot.meal_type, recipe, portions, len(slot_candidates[slot_index])))
 
-            plan.batches.append(Batch(index, batch_start, batch_end, slots, _totals(self.persons, self.slots, recipes)))
+            cook_date = batch_start - timedelta(days=1 if self.eat_next_day else 0)
+            plan.batches.append(
+                Batch(index, batch_start, batch_end, cook_date, slots, _totals(self.persons, self.slots, recipes))
+            )
             previous = {r.id for r in recipes if r is not None}
             for r in recipes:
                 if r is not None:

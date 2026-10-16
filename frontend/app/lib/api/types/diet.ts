@@ -1,5 +1,5 @@
 /* tslint:disable */
-/* eslint-disable */
+
 /**
 /* This file was automatically generated from pydantic models by running pydantic2ts.
 /* Do not modify it by hand - just update the pydantic models and then re-run the script
@@ -12,6 +12,7 @@ export type DietModificationKind = "add" | "remove" | "swap";
 export type DietImportStatus = "created" | "updated" | "error";
 export type DietProductUnit = "g" | "ml";
 export type DietProductSource = "custom" | "off";
+export type DietShoppingListMode = "period" | "batch" | "none";
 
 export interface DietDiaryCreate {
   personId: string;
@@ -189,6 +190,7 @@ export interface DietPerson {
 }
 export interface DietPlanBatch {
   index: number;
+  cookDate: string;
   startDate: string;
   endDate: string;
   days: number;
@@ -249,6 +251,11 @@ export interface DietPlanRequest {
 export interface DietPlanSaveResult {
   created: number;
   removed: number;
+  shoppingLists?: DietShoppingListRef[];
+}
+export interface DietShoppingListRef {
+  id: string;
+  name: string;
 }
 export interface DietProductCreate {
   name: string;
@@ -314,6 +321,8 @@ export interface DietSettingsOut {
   persons?: DietPerson[];
   cookingDays?: number[];
   mealSlots?: DietMealSlot[];
+  eatNextDay?: boolean;
+  shoppingList?: DietShoppingListMode;
   groupId: string;
   householdId: string;
   id: string;
@@ -322,6 +331,8 @@ export interface DietSettingsSave {
   persons?: DietPerson[];
   cookingDays?: number[];
   mealSlots?: DietMealSlot[];
+  eatNextDay?: boolean;
+  shoppingList?: DietShoppingListMode;
   groupId: string;
   householdId: string;
 }
@@ -329,4 +340,6 @@ export interface DietSettingsUpdate {
   persons?: DietPerson[];
   cookingDays?: number[];
   mealSlots?: DietMealSlot[];
+  eatNextDay?: boolean;
+  shoppingList?: DietShoppingListMode;
 }

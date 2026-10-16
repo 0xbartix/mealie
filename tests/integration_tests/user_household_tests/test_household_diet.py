@@ -2,6 +2,7 @@ import io
 import zipfile
 from datetime import date
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.utils import api_routes
@@ -197,7 +198,9 @@ def test_preview_swap_and_save(api_client: TestClient, unique_user: TestUser):
     save = {**period, "locked": final_locked}
     response = api_client.post(SAVE, json=save, headers=unique_user.token)
     assert response.status_code == 200, response.text
-    assert response.json() == {"created": 24, "removed": 0}  # 21 meals + 3 cooking-day notes
+    result = response.json()
+    assert (result["created"], result["removed"]) == (24, 0)  # 21 meals + 3 cooking-day notes
+    assert [sl["name"] for sl in result["shoppingLists"]] == ["Plan diety 19.10–25.10"]
 
     entries = api_client.get(
         api_routes.households_mealplans,
@@ -220,7 +223,8 @@ def test_preview_swap_and_save(api_client: TestClient, unique_user: TestUser):
 
     # saving again replaces only the planner's own entries
     response = api_client.post(SAVE, json=save, headers=unique_user.token)
-    assert response.json() == {"created": 24, "removed": 24}
+    result = response.json()
+    assert (result["created"], result["removed"]) == (24, 24)
     entries = api_client.get(
         api_routes.households_mealplans,
         params={"start_date": "2026-10-19", "end_date": "2026-10-25", "perPage": -1},
@@ -302,3 +306,58 @@ def test_import_never_overwrites_recipes_it_did_not_create(
     assert second["recipeSlug"] != first["recipeSlug"]
     original = api_client.get(api_routes.recipes_slug(first["recipeSlug"]), headers=unique_user.token).json()
     assert original["nutrition"]["calories"] == "600"
+
+
+def test_save_writes_shopping_lists_and_honours_eat_next_day(api_client: TestClient, unique_user: TestUser):
+    seed_recipes(api_client, unique_user)
+    settings = configure(api_client, unique_user)  # cooking on Sunday and Wednesday
+    settings["eatNextDay"] = True
+    settings["shoppingList"] = "batch"
+    assert api_client.put(SETTINGS, json=settings, headers=unique_user.token).status_code == 200
+
+    period = {"startDate": "2026-11-16", "endDate": "2026-11-22"}  # Mon..Sun
+    preview = api_client.post(PREVIEW, json={**period, "seed": 4}, headers=unique_user.token).json()
+    assert [(b["cookDate"], b["startDate"], b["endDate"]) for b in preview["batches"]] == [
+        ("2026-11-15", "2026-11-16", "2026-11-18"),
+        ("2026-11-18", "2026-11-19", "2026-11-22"),
+    ]
+    locked = {str(b["index"]): {str(s["slotIndex"]): s["recipe"]["id"] for s in b["slots"]} for b in preview["batches"]}
+    saved = api_client.post(SAVE, json={**period, "locked": locked}, headers=unique_user.token).json()
+    assert [sl["name"] for sl in saved["shoppingLists"]] == [
+        "Gotowanie niedziela 15.11 (na 3 dni)",
+        "Gotowanie środa 18.11 (na 4 dni)",
+    ]
+
+    # the cooking note sits on the cooking day, the evening before the food is eaten
+    params = {"start_date": "2026-11-15", "end_date": "2026-11-22", "perPage": -1}
+    entries = api_client.get(api_routes.households_mealplans, params=params, headers=unique_user.token).json()["items"]
+    notes = sorted((e["date"], e["title"]) for e in entries if e["recipeId"] is None)
+    assert notes == [("2026-11-15", "Dzień gotowania – na 3 dni"), ("2026-11-18", "Dzień gotowania – na 4 dni")]
+    assert not any(e["date"] == "2026-11-15" and e["recipeId"] for e in entries)
+
+    # the list holds every recipe of the cooking, scaled to the servings cooked
+    first = api_client.get(
+        api_routes.households_shopping_lists_item_id(saved["shoppingLists"][0]["id"]), headers=unique_user.token
+    ).json()
+    refs = {r["recipeId"]: r["recipeQuantity"] for r in first["recipeReferences"]}
+    batch = preview["batches"][0]
+    assert set(refs) == {s["recipe"]["id"] for s in batch["slots"]}
+    for slot in batch["slots"]:
+        assert refs[slot["recipe"]["id"]] == pytest.approx(
+            slot["portionsPerBatch"] / slot["recipe"]["servings"], abs=0.01
+        )
+    assert first["listItems"]
+
+    # saving again replaces the planner's lists instead of piling them up
+    again = api_client.post(SAVE, json={**period, "locked": locked}, headers=unique_user.token).json()
+    assert len(again["shoppingLists"]) == 2
+    assert (
+        api_client.get(
+            api_routes.households_shopping_lists_item_id(saved["shoppingLists"][0]["id"]), headers=unique_user.token
+        ).status_code
+        == 404
+    )
+
+    settings["shoppingList"] = "none"
+    settings["eatNextDay"] = False
+    assert api_client.put(SETTINGS, json=settings, headers=unique_user.token).status_code == 200

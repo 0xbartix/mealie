@@ -161,7 +161,7 @@ class DietTrackingService(BaseService):
                 household_id=self.household_id,
                 source=DietProductSource.off,
                 off_code=found.code,
-            ).model_dump()
+            ).model_dump(),
         )
         self.session.add(product)
         self.session.commit()

@@ -2,7 +2,8 @@ import io
 import random
 import re
 import zipfile
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from uuid import UUID
 
 import sqlalchemy as sa
 from pydantic import UUID4
@@ -31,7 +32,10 @@ from mealie.schema.diet.diet import (
     DietSettingsOut,
     DietSettingsSave,
     DietSettingsUpdate,
+    DietShoppingListMode,
+    DietShoppingListRef,
 )
+from mealie.schema.household.group_shopping_list import ShoppingListAddRecipeParamsBulk, ShoppingListCreate
 from mealie.schema.household.household import HouseholdInDB
 from mealie.schema.meal_plan.new_meal import PlanEntryType, ReadPlanEntry, SavePlanEntry
 from mealie.schema.recipe.recipe import Recipe, RecipeCategory, RecipeTag
@@ -49,8 +53,9 @@ from mealie.schema.recipe.recipe_step import RecipeStep
 from mealie.schema.response.pagination import PaginationQuery
 from mealie.schema.user.user import PrivateUser
 from mealie.services._base_service import BaseService
-from mealie.services.diet.planner import Candidate, DietPlanner, Person, Plan, Slot
+from mealie.services.diet.planner import Batch, Candidate, DietPlanner, Person, Plan, Slot
 from mealie.services.diet.recipe_file import MealType, RecipeFile, RecipeFileError, fold, parse_recipe_file
+from mealie.services.household_services.shopping_lists import ShoppingListService
 from mealie.services.parser_services._base import DataMatcher
 from mealie.services.recipe.recipe_service import RecipeService
 
@@ -135,6 +140,13 @@ def tracked_matches(tracked: dict, entry: ReadPlanEntry) -> bool:
     """Whether a remembered planner entry still is the meal plan entry the planner wrote."""
     fingerprint = entry_fingerprint(entry)
     return all(tracked.get(key) == fingerprint[key] for key in FINGERPRINT_KEYS)
+
+
+WEEKDAYS = ["poniedziałek", "wtorek", "środa", "czwartek", "piątek", "sobota", "niedziela"]
+
+
+def _short(day: date) -> str:
+    return day.strftime("%d.%m")
 
 
 def _fmt(value: float) -> str:
@@ -229,6 +241,7 @@ class DietService(BaseService):
             candidates=self._candidates(),
             cooking_weekdays=set(settings.cooking_days),
             seed=seed,
+            eat_next_day=settings.eat_next_day,
         )
         plan = planner.plan(
             request.start_date,
@@ -275,6 +288,7 @@ class DietService(BaseService):
             batches.append(
                 DietPlanBatch(
                     index=batch.index,
+                    cook_date=batch.cook_date,
                     start_date=batch.start,
                     end_date=batch.end,
                     days=batch.days,
@@ -299,7 +313,9 @@ class DietService(BaseService):
             PaginationQuery(
                 page=1,
                 per_page=-1,
-                query_filter=f"date >= {request.start_date} AND date <= {request.end_date}",
+                # with "eat next day" the first cooking note sits the day before the period
+                query_filter=f"date >= {min([request.start_date, *(b.cook_date for b in plan.batches)])}"
+                f" AND date <= {request.end_date}",
             )
         ).items
         current = {e.id: e for e in in_period}
@@ -324,7 +340,7 @@ class DietService(BaseService):
                 )
                 note = meals.create(
                     SavePlanEntry(
-                        date=batch.start,
+                        date=batch.cook_date,
                         entry_type=MEAL_TO_ENTRY_TYPE[cooked[0].meal_type],
                         title=f"Dzień gotowania – na {days}",
                         text=dishes,
@@ -368,7 +384,65 @@ class DietService(BaseService):
             model.generated_entry_ids = kept + created
             self.repos.session.commit()
 
-        return DietPlanSaveResult(created=len(created), removed=removed)
+        lists = self._write_shopping_lists(plan, request, settings)
+        return DietPlanSaveResult(created=len(created), removed=removed, shopping_lists=lists)
+
+    def _write_shopping_lists(
+        self, plan: Plan, request: DietPlanRequest, settings: DietSettingsOut
+    ) -> list[DietShoppingListRef]:
+        """Shopping lists for the plan; lists the planner wrote earlier for an overlapping period are replaced."""
+        model = self._settings_model()
+        start, end = request.start_date.isoformat(), request.end_date.isoformat()
+        tracked = [t for t in model.generated_list_ids or [] if isinstance(t, dict)]
+        overlapping = [t for t in tracked if t["start"] <= end and t["end"] >= start]
+        for old in overlapping:
+            try:
+                self.repos.group_shopping_lists.delete(old["id"])
+            except Exception:
+                self.repos.session.rollback()  # already deleted by hand
+        kept = [t for t in tracked if t not in overlapping]
+
+        groups: list[tuple[str, list[Batch]]] = []
+        if settings.shopping_list is DietShoppingListMode.period:
+            groups = [(f"Plan diety {_short(request.start_date)}–{_short(request.end_date)}", plan.batches)]
+        elif settings.shopping_list is DietShoppingListMode.batch:
+            for batch in plan.batches:
+                days = "1 dzień" if batch.days == 1 else f"{batch.days} dni"
+                groups.append(
+                    (f"Gotowanie {WEEKDAYS[batch.cook_date.weekday()]} {_short(batch.cook_date)} (na {days})", [batch])
+                )
+
+        service = ShoppingListService(self.repos)
+        written: list[DietShoppingListRef] = []
+        for name, batches in groups:
+            scales: dict[str, tuple[UUID4, float]] = {}
+            for batch in batches:
+                for slot in batch.slots:
+                    if slot.recipe is None:
+                        continue
+                    recipe_id, scale = scales.get(slot.recipe.id, (UUID(slot.recipe.id), 0.0))
+                    scales[slot.recipe.id] = (
+                        recipe_id,
+                        scale + slot.portions_per_day * batch.days / slot.recipe.servings,
+                    )
+            if not scales:
+                continue
+            shopping_list = service.create_one_list(ShoppingListCreate(name=name), owner_id=self.user.id)
+            service.add_recipe_ingredients_to_list(
+                shopping_list.id,
+                [
+                    ShoppingListAddRecipeParamsBulk(recipe_id=recipe_id, recipe_increment_quantity=round(scale, 3))
+                    for recipe_id, scale in scales.values()
+                ],
+            )
+            written.append(DietShoppingListRef(id=shopping_list.id, name=name))
+            first, last = batches[0].start, batches[-1].end
+            kept.append({"id": str(shopping_list.id), "start": first.isoformat(), "end": last.isoformat()})
+
+        model = self._settings_model()
+        model.generated_list_ids = kept
+        self.repos.session.commit()
+        return written
 
     def tracked_entries(self) -> list[dict]:
         """Meal plan entries the planner wrote, with each person's portions."""

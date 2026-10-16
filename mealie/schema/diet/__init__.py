@@ -16,6 +16,8 @@ from .diet import (
     DietSettingsOut,
     DietSettingsSave,
     DietSettingsUpdate,
+    DietShoppingListMode,
+    DietShoppingListRef,
 )
 from .tracking import (
     DietAmountUnit,
@@ -62,6 +64,8 @@ __all__ = [
     "DietSettingsOut",
     "DietSettingsSave",
     "DietSettingsUpdate",
+    "DietShoppingListMode",
+    "DietShoppingListRef",
     "DietAmountUnit",
     "DietDiaryCreate",
     "DietDiaryDay",

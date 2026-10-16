@@ -26,6 +26,10 @@ class HouseholdDietSettings(SqlAlchemyBase, BaseMixins):
     meal_slots: Mapped[list] = mapped_column(sa.JSON, nullable=False, default=list)
     # ids of meal plan entries written by the planner, so regenerating a period only replaces those
     generated_entry_ids: Mapped[list] = mapped_column(sa.JSON, nullable=False, default=list)
+    eat_next_day: Mapped[bool] = mapped_column(sa.Boolean, nullable=False, default=False)
+    shopping_list: Mapped[str] = mapped_column(sa.String, nullable=False, default="period")
+    # shopping lists written by the planner: [{id, start, end}]
+    generated_list_ids: Mapped[list] = mapped_column(sa.JSON, nullable=False, default=list)
 
     @auto_init()
     def __init__(self, **_) -> None:
