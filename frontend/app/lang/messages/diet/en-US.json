@@ -146,5 +146,6 @@
   "portions-one": "{count} serving",
   "portions-other": "{count} servings",
   "molds-one": "{count} mold",
-  "molds-other": "{count} molds"
+  "molds-other": "{count} molds",
+  "scanner-failed": "The scanner doesn't work in this browser – type the code instead."
 }

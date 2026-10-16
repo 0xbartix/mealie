@@ -309,17 +309,21 @@ class DietService(BaseService):
 
         # Replace only what the planner wrote itself. SQLite reuses the ids of deleted rows, so an id alone
         # may point at a manual entry added later: an entry counts as ours only while it still looks as we wrote it.
-        in_period = meals.page_all(
-            PaginationQuery(
-                page=1,
-                per_page=-1,
-                # with "eat next day" the first cooking note sits the day before the period
-                query_filter=f"date >= {min([request.start_date, *(b.cook_date for b in plan.batches)])}"
-                f" AND date <= {request.end_date}",
-            )
+        period_start, period_end = request.start_date.isoformat(), request.end_date.isoformat()
+
+        def belongs(t: dict) -> bool:
+            # A cooking note belongs to the days its food is eaten: with "eat next day" it sits the day before
+            # the period, and the note on the period's last day is the next period's. Meals belong to their date.
+            day = t.get("eats") or t["date"]
+            return period_start <= day <= period_end
+
+        window_start = min([request.start_date - timedelta(days=1), *(b.cook_date for b in plan.batches)])
+        in_window = meals.page_all(
+            PaginationQuery(page=1, per_page=-1, query_filter=f"date >= {window_start} AND date <= {request.end_date}")
         ).items
-        current = {e.id: e for e in in_period}
-        stale = {t["id"] for t in tracked if t["id"] in current and tracked_matches(t, current[t["id"]])}
+        current = {e.id: e for e in in_window}
+        ours = {t["id"] for t in tracked if t["id"] in current and tracked_matches(t, current[t["id"]]) and belongs(t)}
+        stale = set(ours)
         removed = 0
         created: list[dict] = []
         try:
@@ -348,7 +352,7 @@ class DietService(BaseService):
                         user_id=self.user.id,
                     )
                 )
-                created.append(entry_fingerprint(note))
+                created.append({**entry_fingerprint(note), "eats": batch.start.isoformat()})
 
                 for offset in range(batch.days):
                     day = batch.start + timedelta(days=offset)
@@ -377,7 +381,7 @@ class DietService(BaseService):
             raise
         finally:
             # record progress even after a failure, so entries written so far are still replaced next time
-            deleted = {t["id"] for t in tracked if t["id"] in current and tracked_matches(t, current[t["id"]])} - stale
+            deleted = ours - stale
             horizon = (datetime.now(UTC).date() - timedelta(days=PRUNE_AFTER_DAYS)).isoformat()
             kept = [t for t in tracked if t["id"] not in deleted and t["date"] >= horizon]
             model = self._settings_model()

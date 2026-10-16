@@ -193,6 +193,11 @@ const freezerMolds = ref(1);
 
 const quick = ref({ name: "", kcal: null as number | null, protein: null as number | null, fat: null as number | null, carbs: null as number | null });
 
+// a cleared number field gives "" – treat it as empty, not as 0
+function num(value: unknown): number | null {
+  return value === "" || value === null || value === undefined || Number.isNaN(Number(value)) ? null : Number(value);
+}
+
 function fold(text: string) {
   return text.toLowerCase().replaceAll("ł", "l").normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
@@ -262,16 +267,17 @@ const freezerMacros = computed(() => (freezerChoice.value ? scale(freezerChoice.
 
 const canAdd = computed(() => {
   if (tab.value === "product") {
-    return !!product.value && productAmount.value > 0;
+    return !!product.value && (num(productAmount.value) ?? 0) > 0;
   }
   if (tab.value === "recipe") {
-    return !!recipe.value && recipePortions.value > 0;
+    return !!recipe.value && (num(recipePortions.value) ?? 0) > 0;
   }
   if (tab.value === "freezer") {
     const molds = freezerMolds.value;
     return !!freezerChoice.value && molds > 0 && molds * 2 === Math.round(molds * 2) && molds <= freezerChoice.value.left;
   }
-  return !!quick.value.name.trim() && quick.value.kcal !== null && quick.value.kcal >= 0;
+  const kcal = num(quick.value.kcal);
+  return !!quick.value.name.trim() && kcal !== null && kcal >= 0;
 });
 
 async function add() {
@@ -298,10 +304,10 @@ async function add() {
       ...base,
       kind: "quick",
       name: quick.value.name.trim(),
-      kcal: quick.value.kcal ?? 0,
-      protein: quick.value.protein,
-      fat: quick.value.fat,
-      carbs: quick.value.carbs,
+      kcal: num(quick.value.kcal) ?? 0,
+      protein: num(quick.value.protein),
+      fat: num(quick.value.fat),
+      carbs: num(quick.value.carbs),
     };
   }
   saving.value = true;

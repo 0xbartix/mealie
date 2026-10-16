@@ -361,3 +361,40 @@ def test_save_writes_shopping_lists_and_honours_eat_next_day(api_client: TestCli
     settings["shoppingList"] = "none"
     settings["eatNextDay"] = False
     assert api_client.put(SETTINGS, json=settings, headers=unique_user.token).status_code == 200
+
+
+def test_eat_next_day_consecutive_periods_keep_each_other(api_client: TestClient, unique_user: TestUser):
+    seed_recipes(api_client, unique_user)
+    settings = configure(api_client, unique_user)  # cooking on Sunday and Wednesday
+    settings["eatNextDay"] = True
+    settings["shoppingList"] = "none"
+    assert api_client.put(SETTINGS, json=settings, headers=unique_user.token).status_code == 200
+
+    def save(start: str, end: str) -> dict:
+        period = {"startDate": start, "endDate": end}
+        preview = api_client.post(PREVIEW, json={**period, "seed": 3}, headers=unique_user.token).json()
+        locked = {
+            str(b["index"]): {str(s["slotIndex"]): s["recipe"]["id"] for s in b["slots"]} for b in preview["batches"]
+        }
+        response = api_client.post(SAVE, json={**period, "locked": locked}, headers=unique_user.token)
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def on(day: str) -> list[dict]:
+        params = {"start_date": day, "end_date": day, "perPage": -1}
+        return api_client.get(api_routes.households_mealplans, params=params, headers=unique_user.token).json()["items"]
+
+    save("2026-11-16", "2026-11-22")
+    meals_22 = [e for e in on("2026-11-22") if e["recipeId"]]
+    assert meals_22
+
+    # the next week cooks on Sunday 22.11 – its note goes there, the meals eaten that day stay
+    assert save("2026-11-23", "2026-11-29")["removed"] == 0
+    assert [e for e in on("2026-11-22") if e["recipeId"]] == meals_22
+    assert [e["title"] for e in on("2026-11-22") if not e["recipeId"]] == ["Dzień gotowania – na 3 dni"]
+
+    # saving the first week again doesn't touch the next week's cooking note on 22.11
+    again = save("2026-11-16", "2026-11-22")
+    assert again["removed"] == again["created"]
+    notes_22 = [e for e in on("2026-11-22") if not e["recipeId"]]
+    assert len(notes_22) == 1

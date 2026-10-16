@@ -35,6 +35,8 @@
 </template>
 
 <script setup lang="ts">
+import wasmUrl from "zxing-wasm/reader/zxing_reader.wasm?url";
+
 const open = defineModel<boolean>({ default: false });
 const emit = defineEmits<{ detected: [code: string] }>();
 
@@ -44,54 +46,98 @@ const manual = ref("");
 const error = ref("");
 let stream: MediaStream | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
-let active = false;
+let run = 0; // every start/stop bumps it, so a start still waiting for the camera knows it was cancelled
 
 const FORMATS = ["ean_13", "ean_8", "upc_a", "upc_e", "code_128"];
 
-async function detector() {
-  // the ponyfill uses the browser's own detector when there is one (Chrome on Android) and a WebAssembly
-  // build of ZXing otherwise (e.g. Safari on iPhone)
-  const { BarcodeDetector } = await import("barcode-detector/ponyfill");
+interface Reader {
+  detect: (source: HTMLVideoElement) => Promise<{ rawValue: string }[]>;
+}
+
+async function detector(): Promise<Reader> {
+  // the browser's own reader when it has one (Chrome on Android, Safari on Mac), otherwise ZXing compiled to
+  // WebAssembly – served with the app instead of the package's default CDN
+  const Native = (globalThis as { BarcodeDetector?: any }).BarcodeDetector;
+  if (Native) {
+    const supported: string[] = await Native.getSupportedFormats().catch(() => []);
+    if (supported.includes("ean_13")) {
+      return new Native({ formats: FORMATS.filter(f => supported.includes(f)) });
+    }
+  }
+  const { BarcodeDetector, prepareZXingModule } = await import("barcode-detector/ponyfill");
+  prepareZXingModule({
+    overrides: { locateFile: (path: string, prefix: string) => (path.endsWith(".wasm") ? wasmUrl : prefix + path) },
+  });
   return new BarcodeDetector({ formats: FORMATS as never });
 }
 
+function stopTracks(media: MediaStream | null) {
+  media?.getTracks().forEach(track => track.stop());
+}
+
 async function start() {
+  const current = ++run;
+  const cancelled = () => current !== run;
   error.value = "";
   manual.value = "";
   if (!navigator.mediaDevices?.getUserMedia) {
     error.value = i18n.t("diet.camera-unavailable");
     return;
   }
+  let media: MediaStream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+    media = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
   }
   catch {
-    error.value = i18n.t("diet.camera-unavailable");
+    if (!cancelled()) {
+      error.value = i18n.t("diet.camera-unavailable");
+    }
     return;
   }
-  if (!video.value) {
+  if (cancelled() || !video.value) {
+    stopTracks(media);
     return;
   }
-  video.value.srcObject = stream;
-  await video.value.play();
-  const reader = await detector();
-  active = true;
+  stream = media;
+  let reader: Reader;
+  try {
+    video.value.srcObject = media;
+    await video.value.play();
+    reader = await detector();
+  }
+  catch {
+    if (!cancelled()) {
+      error.value = i18n.t("diet.scanner-failed");
+      stop();
+    }
+    return;
+  }
+  if (cancelled()) {
+    return;
+  }
 
+  let failures = 0;
   const scan = async () => {
-    if (!active || !video.value) {
+    if (cancelled() || !video.value) {
       return;
     }
     try {
       const codes = await reader.detect(video.value);
+      failures = 0;
       const code = codes.find(c => /^\d{6,14}$/.test(c.rawValue))?.rawValue;
-      if (code) {
+      if (code && !cancelled()) {
         emit("detected", code);
         open.value = false;
         return;
       }
     }
     catch {
-      // a frame that couldn't be read – try the next one
+      // a single unreadable frame is fine; a reader that keeps failing is broken
+      if (++failures >= 8) {
+        error.value = i18n.t("diet.scanner-failed");
+        stop();
+        return;
+      }
     }
     timer = setTimeout(scan, 250);
   };
@@ -99,12 +145,16 @@ async function start() {
 }
 
 function stop() {
-  active = false;
+  run++;
   if (timer) {
     clearTimeout(timer);
+    timer = null;
   }
-  stream?.getTracks().forEach(track => track.stop());
+  stopTracks(stream);
   stream = null;
+  if (video.value) {
+    video.value.srcObject = null;
+  }
 }
 
 function submitManual() {

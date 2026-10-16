@@ -11,6 +11,7 @@ from tests.integration_tests.user_household_tests.test_household_diet import (
     recipe_md,
     upload,
 )
+from tests.utils import api_routes
 from tests.utils.fixture_schemas import TestUser
 
 BASE = "/api/households/diet"
@@ -43,6 +44,8 @@ class FakeOff:
         return [MILK, SKYR]
 
     def by_barcode(self, code: str) -> DietOffProduct | None:
+        if self.down:
+            raise OffUnavailable("rate limited")
         return {MILK.code: MILK, SKYR.code: SKYR}.get(code)
 
 
@@ -276,3 +279,56 @@ def test_diary_from_plan_uses_each_persons_portions_once(api_client: TestClient,
         f"{BASE}/diary", params={"person_id": bartek, "date": "2026-11-10"}, headers=unique_user.token
     )
     assert bartek_day.json()["entries"] == []
+
+
+def test_saving_an_off_result_while_off_is_down_is_a_clear_error(
+    api_client: TestClient, unique_user: TestUser, fake_off
+):
+    fake_off.down = True
+    response = api_client.post(f"{BASE}/products/off/{SKYR.code}", headers=unique_user.token)
+    assert response.status_code == 400
+    assert "off-unavailable" in response.text
+
+
+def test_freezer_adjust_only_in_halves(api_client: TestClient, unique_user: TestUser):
+    recipe = gulasz(api_client, unique_user)
+    batch = api_client.post(
+        f"{BASE}/freezer",
+        json={
+            "recipeId": recipe["id"],
+            "frozenOn": "2026-10-16",
+            "servings": 4,
+            "molds": [{"capacityMl": 500, "count": 2}],
+        },
+        headers=unique_user.token,
+    ).json()
+    adjust = f"{BASE}/freezer/{batch['id']}/adjust"
+    assert api_client.post(adjust, json={"moldIndex": 0, "delta": -0.3}, headers=unique_user.token).status_code == 400
+    half = api_client.post(adjust, json={"moldIndex": 0, "delta": -1.5}, headers=unique_user.token).json()
+    assert half["molds"][0]["left"] == 0.5
+    empty = api_client.post(adjust, json={"moldIndex": 0, "delta": -0.5}, headers=unique_user.token).json()
+    assert empty["molds"][0]["left"] == 0
+
+
+def test_diary_from_plan_survives_saving_the_plan_again(api_client: TestClient, unique_user: TestUser):
+    from tests.integration_tests.user_household_tests.test_household_diet import seed_recipes
+
+    seed_recipes(api_client, unique_user)
+    settings = configure(api_client, unique_user)
+    ania = settings["persons"][1]["id"]
+    period = {"startDate": "2026-11-09", "endDate": "2026-11-10"}
+    preview = api_client.post(PREVIEW, json={**period, "seed": 2}, headers=unique_user.token).json()
+    locked = {str(b["index"]): {str(s["slotIndex"]): s["recipe"]["id"] for s in b["slots"]} for b in preview["batches"]}
+    assert api_client.post(SAVE, json={**period, "locked": locked}, headers=unique_user.token).status_code == 200
+    payload = {"personId": ania, "date": "2026-11-10"}
+    assert api_client.post(f"{BASE}/diary/from-plan", json=payload, headers=unique_user.token).json()["created"] == 3
+
+    # a manual entry takes the next id, so saving the same plan again really gives its entries new ids;
+    # the meals already logged are still recognised
+    manual = {"date": "2026-11-12", "entryType": "snack", "title": "Jabłko"}
+    assert api_client.post(api_routes.households_mealplans, json=manual, headers=unique_user.token).status_code == 201
+    assert api_client.post(SAVE, json={**period, "locked": locked}, headers=unique_user.token).status_code == 200
+    again = api_client.post(f"{BASE}/diary/from-plan", json=payload, headers=unique_user.token).json()
+    assert again == {"created": 0, "skipped": 3}
+    day = api_client.get(f"{BASE}/diary", params={"person_id": ania, "date": "2026-11-10"}, headers=unique_user.token)
+    assert len(day.json()["entries"]) == 3

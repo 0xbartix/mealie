@@ -49,10 +49,10 @@
             {{ $t("diet.per-mold") }}: {{ Math.round(mold.kcal) }} kcal · B {{ mold.protein }} · T {{ mold.fat }} · W {{ mold.carbs }}
           </span>
           <v-spacer />
-          <v-btn variant="text" size="x-small" :disabled="mold.left <= 0" @click="adjust(batch.id, index, -1)">
+          <v-btn variant="text" size="x-small" :disabled="mold.left <= 0" @click="adjust(batch.id, index, -Math.min(1, mold.left))">
             {{ $t("diet.take-out") }}
           </v-btn>
-          <v-btn variant="text" size="x-small" :disabled="mold.left >= mold.count" @click="adjust(batch.id, index, 1)">
+          <v-btn variant="text" size="x-small" :disabled="mold.left >= mold.count" @click="adjust(batch.id, index, Math.min(1, mold.count - mold.left))">
             {{ $t("diet.put-back") }}
           </v-btn>
         </div>
@@ -71,6 +71,7 @@
 <script setup lang="ts">
 import DietFreezerDialog from "~/components/Domain/Diet/DietFreezerDialog.vue";
 import { useUserApi } from "~/composables/api";
+import { alert } from "~/composables/use-toast";
 import type { DietFreezerBatchOut, DietFreezerModificationOut } from "~/lib/api/types/diet";
 
 definePageMeta({
@@ -114,7 +115,10 @@ async function load() {
 }
 
 async function adjust(id: string, index: number, delta: number) {
-  await api.diet.adjustFreezer(id, index, delta);
+  const { error } = await api.diet.adjustFreezer(id, index, delta);
+  if (error) {
+    alert.error(i18n.t("events.something-went-wrong"));
+  }
   await load();
 }
 

@@ -1,6 +1,7 @@
 """Products, freezer and the daily kcal diary of a household."""
 
 import re
+from collections import Counter
 from datetime import date as Date
 from typing import Any
 from uuid import UUID
@@ -93,8 +94,11 @@ class DietTrackingService(BaseService):
     def _scoped(self, model: Any) -> sa.Select:
         return sa.select(model).where(model.household_id == self.household_id)
 
-    def _get(self, model: Any, item_id: UUID) -> Any:
-        item = self.session.execute(self._scoped(model).where(model.id == item_id)).scalar_one_or_none()
+    def _get(self, model: Any, item_id: UUID, lock: bool = False) -> Any:
+        query = self._scoped(model).where(model.id == item_id)
+        if lock:  # freezer stock is read, changed and written back – keep a concurrent change out (PostgreSQL)
+            query = query.with_for_update()
+        item = self.session.execute(query).scalar_one_or_none()
         if item is None:
             raise DietNotFound(f"{model.__tablename__}:{item_id}")
         return item
@@ -170,7 +174,10 @@ class DietTrackingService(BaseService):
     def save_off_product(self, code: str) -> DietProductOut:
         if not BARCODE_RE.fullmatch(code):
             raise ValueError("invalid-code")
-        found = self.off.by_barcode(code)
+        try:
+            found = self.off.by_barcode(code)
+        except OffUnavailable as e:
+            raise ValueError("off-unavailable") from e
         if found is None:
             raise DietNotFound(f"off:{code}")
         return self._save_off(found)
@@ -349,6 +356,8 @@ class DietTrackingService(BaseService):
         return result if include_empty else [b for b in result if b.molds_left > 0]
 
     def _change_molds(self, batch: DietFreezerBatch, mold_index: int, delta: float) -> None:
+        if delta == 0 or round(delta * 2) != delta * 2:
+            raise ValueError("molds-in-halves")
         molds = [dict(m) for m in batch.molds]
         if not 0 <= mold_index < len(molds):
             raise ValueError("invalid-mold")
@@ -359,7 +368,7 @@ class DietTrackingService(BaseService):
         batch.molds = molds  # reassign so SQLAlchemy notices the JSON change
 
     def adjust_freezer(self, batch_id: UUID, data: DietFreezerAdjust) -> DietFreezerBatchOut:
-        batch = self._get(DietFreezerBatch, batch_id)
+        batch = self._get(DietFreezerBatch, batch_id, lock=True)
         self._change_molds(batch, data.mold_index, data.delta)
         self.session.commit()
         return self._batch_out(batch)
@@ -448,7 +457,7 @@ class DietTrackingService(BaseService):
                 raise ValueError("freezer-mold-required")
             if round(data.amount * 2) != data.amount * 2:
                 raise ValueError("molds-in-halves")
-            batch = self._get(DietFreezerBatch, data.batch_id)
+            batch = self._get(DietFreezerBatch, data.batch_id, lock=True)
             self._change_molds(batch, data.mold_index, -data.amount)
             mold = batch.molds[data.mold_index]
             nutrition = _from_dict(mold).scaled(data.amount)
@@ -476,7 +485,7 @@ class DietTrackingService(BaseService):
         entry = self._get(DietDiaryEntry, entry_id)
         if entry.kind == DietDiaryKind.freezer.value and entry.batch_id is not None and entry.mold_index is not None:
             batch = self.session.execute(
-                self._scoped(DietFreezerBatch).where(DietFreezerBatch.id == entry.batch_id)
+                self._scoped(DietFreezerBatch).where(DietFreezerBatch.id == entry.batch_id).with_for_update()
             ).scalar_one_or_none()
             if batch is not None and entry.mold_index < len(batch.molds):
                 self._change_molds(batch, entry.mold_index, entry.amount)
@@ -498,20 +507,29 @@ class DietTrackingService(BaseService):
             PaginationQuery(page=1, per_page=-1, query_filter=f"date >= {day} AND date <= {day}")
         ).items
         current = {e.id: e for e in entries}
-        already = set(
-            self.session.execute(
-                sa.select(DietDiaryEntry.plan_entry_id).where(
+        # Meals already taken from the plan that day. Saving the plan again gives its entries new ids,
+        # so a meal is recognised by what it is (meal + recipe), not by the id of the plan entry.
+        already = Counter(
+            (meal_type, str(recipe_id))
+            for meal_type, recipe_id in self.session.execute(
+                sa.select(DietDiaryEntry.meal_type, DietDiaryEntry.recipe_id).where(
                     DietDiaryEntry.household_id == self.household_id,
                     DietDiaryEntry.person_id == data.person_id,
-                    DietDiaryEntry.plan_entry_id.in_([t["id"] for t in tracked]),
+                    DietDiaryEntry.date == data.date,
+                    DietDiaryEntry.plan_entry_id.is_not(None),
                 )
-            ).scalars()
+            ).all()
         )
 
         created = skipped = 0
         for t in tracked:
             entry = current.get(t["id"])
-            if entry is None or not tracked_matches(t, entry) or t["id"] in already:
+            if entry is None or not tracked_matches(t, entry):
+                skipped += 1
+                continue
+            meal = ENTRY_TYPE_TO_MEAL.get(entry.entry_type.value, MealType.snack)
+            if already[(meal.value, t["recipe"])] > 0:
+                already[(meal.value, t["recipe"])] -= 1
                 skipped += 1
                 continue
             try:
@@ -519,7 +537,7 @@ class DietTrackingService(BaseService):
                     DietDiaryCreate(
                         person_id=data.person_id,
                         date=data.date,
-                        meal_type=ENTRY_TYPE_TO_MEAL.get(entry.entry_type.value, MealType.snack),
+                        meal_type=meal,
                         kind=DietDiaryKind.recipe,
                         recipe_id=UUID(t["recipe"]),
                         amount=t["portions"][data.person_id],

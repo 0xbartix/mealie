@@ -88,13 +88,25 @@ watch(open, (value) => {
     : { ...blank(), name: props.initialName ?? "", barcode: props.initialBarcode ?? "" };
 });
 
-const valid = computed(() => !!form.value.name?.trim() && Number(form.value.kcal) >= 0 && Number(form.value.kcal) <= 1000);
+// a cleared number field gives "" – treat it as empty, not as 0
+function num(value: unknown): number | null {
+  return value === "" || value === null || value === undefined || Number.isNaN(Number(value)) ? null : Number(value);
+}
+
+const valid = computed(() => {
+  const kcal = num(form.value.kcal);
+  return !!form.value.name?.trim() && kcal !== null && kcal >= 0 && kcal <= 1000;
+});
 
 async function save() {
   saving.value = true;
   const payload: DietProductCreate = {
     ...form.value,
-    portionGrams: form.value.portionGrams ? Number(form.value.portionGrams) : null,
+    kcal: num(form.value.kcal) ?? 0,
+    protein: num(form.value.protein) ?? 0,
+    fat: num(form.value.fat) ?? 0,
+    carbs: num(form.value.carbs) ?? 0,
+    portionGrams: num(form.value.portionGrams) || null,
   };
   const { data, error } = props.product
     ? await api.diet.updateProduct(props.product.id, payload)

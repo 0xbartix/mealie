@@ -150,5 +150,6 @@
   "molds-one": "{count} foremka",
   "molds-few": "{count} foremki",
   "molds-many": "{count} foremek",
-  "molds-other": "{count} foremki"
+  "molds-other": "{count} foremki",
+  "scanner-failed": "Skaner nie działa w tej przeglądarce – wpisz kod ręcznie."
 }

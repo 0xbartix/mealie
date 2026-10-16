@@ -255,6 +255,11 @@ const kinds = computed(() => [
   { value: "swap", title: i18n.t("diet.change-swap") },
 ]);
 
+// a cleared number field gives "" – treat it as empty, not as 0
+function num(value: unknown): number | null {
+  return value === "" || value === null || value === undefined || Number.isNaN(Number(value)) ? null : Number(value);
+}
+
 function fold(text: string) {
   return text.toLowerCase().replaceAll("ł", "l").normalize("NFKD").replace(/[̀-ͯ]/g, "");
 }
@@ -316,12 +321,23 @@ const request = computed<DietFreezerRequest | null>(() => {
       replacedGrams: c.kind === "swap" ? Number(c.replacedGrams) : null,
     });
   }
+  const corrected = override.value;
+  if (manual.value && num(corrected.kcal) === null) {
+    return null;
+  }
   return {
     recipeId: recipeId.value,
     frozenOn: frozenOn.value,
     servings: Number(servings.value),
     modifications,
-    override: manual.value ? { ...override.value } : null,
+    override: manual.value
+      ? {
+          kcal: num(corrected.kcal) ?? 0,
+          protein: num(corrected.protein) ?? 0,
+          fat: num(corrected.fat) ?? 0,
+          carbs: num(corrected.carbs) ?? 0,
+        }
+      : null,
     molds: validMolds.map(m => ({ capacityMl: Number(m.capacityMl), count: Math.round(Number(m.count)) })),
     note: note.value,
   };
