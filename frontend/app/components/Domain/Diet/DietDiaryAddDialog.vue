@@ -75,8 +75,9 @@
               auto-select-first
               :custom-filter="foldFilter"
             >
+              <!-- in Vuetify 4 the slot's item is the recipe itself (no .raw) -->
               <template #item="{ props: itemProps, item }">
-                <v-list-item v-bind="itemProps" :subtitle="`${Math.round(item.raw.kcal)} kcal / ${$t('diet.portion')}`" />
+                <v-list-item v-bind="itemProps" :subtitle="`${Math.round(item.kcal)} kcal / ${$t('diet.portion')}`" />
               </template>
             </v-autocomplete>
             <v-text-field
