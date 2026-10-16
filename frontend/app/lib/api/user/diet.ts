@@ -14,6 +14,7 @@ import type {
   DietProductCreate,
   DietProductOut,
   DietProductSearch,
+  DietRecipeIngredient,
   DietRecipeOption,
   DietSettingsOut,
   DietSettingsUpdate,
@@ -32,6 +33,7 @@ const routes = {
   barcode: (code: string) => `${prefix}/products/barcode/${encodeURIComponent(code)}`,
   offProduct: (code: string) => `${prefix}/products/off/${encodeURIComponent(code)}`,
   recipes: `${prefix}/recipes`,
+  recipeIngredients: (id: string) => `${prefix}/recipes/${id}/ingredients`,
   freezer: `${prefix}/freezer`,
   freezerPreview: `${prefix}/freezer/preview`,
   freezerBatch: (id: string) => `${prefix}/freezer/${id}`,
@@ -90,6 +92,10 @@ export class DietAPI extends BaseAPI {
 
   async recipeOptions() {
     return await this.requests.get<DietRecipeOption[]>(routes.recipes);
+  }
+
+  async recipeIngredients(recipeId: string) {
+    return await this.requests.get<DietRecipeIngredient[]>(routes.recipeIngredients(recipeId));
   }
 
   // freezer

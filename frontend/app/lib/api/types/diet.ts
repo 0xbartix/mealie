@@ -307,6 +307,14 @@ export interface DietProductSearch {
   off?: DietOffProduct[];
   offUnavailable?: boolean;
 }
+export interface DietRecipeIngredient {
+  name: string;
+  text: string;
+  quantity?: number | null;
+  unit?: string | null;
+  grams?: number | null;
+  estimated?: boolean;
+}
 export interface DietRecipeOption {
   id: string;
   name: string;

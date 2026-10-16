@@ -66,9 +66,8 @@
   "portion-placeholder": "e.g. 1 slice",
   "portion-grams": "Portion weight",
   "search-product": "Search products",
-  "search-hint": "Enter – also search Open Food Facts",
+  "search-hint": "Type a name – searching your products and Open Food Facts",
   "from-open-food-facts": "From Open Food Facts",
-  "search-open-food-facts": "Search Open Food Facts",
   "off-unavailable": "Open Food Facts isn't responding – try again in a minute or add the product by hand.",
   "off-nothing": "Nothing found in Open Food Facts.",
   "barcode-not-found": "Unknown barcode – add the product by hand, the code is filled in.",
@@ -119,7 +118,7 @@
   "put-in-freezer": "Into the freezer",
   "frozen": "Saved in the freezer",
   "change-add": "Added",
-  "change-remove": "Used less",
+  "change-remove": "Removed",
   "change-swap": "Swapped",
   "freezer": "Freezer",
   "freezer-description": "Portions cooked ahead: how many molds are left and their calories.",
@@ -147,5 +146,12 @@
   "portions-other": "{count} servings",
   "molds-one": "{count} mold",
   "molds-other": "{count} molds",
-  "scanner-failed": "The scanner doesn't work in this browser – type the code instead."
+  "scanner-failed": "The scanner doesn't work in this browser – type the code instead.",
+  "searching": "Searching the product database…",
+  "recipe-ingredients-hint": "Click an ingredient you left out, used less of or swapped:",
+  "ingredient-skipped": "Left out",
+  "ingredient-less": "Used less",
+  "ingredient-swapped": "Swapped for another",
+  "from-recipe": "From the recipe: {text}",
+  "from-recipe-less": "From the recipe: {text} – enter how many grams less"
 }

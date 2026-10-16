@@ -34,6 +34,7 @@ from mealie.schema.diet.tracking import (
     DietProductSave,
     DietProductSearch,
     DietProductSource,
+    DietRecipeIngredient,
     DietRecipeOption,
 )
 from mealie.schema.household.household import HouseholdInDB
@@ -52,6 +53,27 @@ ENTRY_TYPE_TO_MEAL: dict[str, MealType] = {
     PlanEntryType.snack.value: MealType.snack,
 }
 BARCODE_RE = re.compile(r"\d{6,14}")
+
+
+# grams (or ml) per unit; spoons and glasses are estimates
+UNIT_GRAMS: dict[str, tuple[float, bool]] = {
+    **dict.fromkeys(("g", "gram", "gramy", "gramów", "ml", "mililitr", "mililitry", "mililitrów"), (1, False)),
+    **dict.fromkeys(("dag", "deko"), (10, False)),
+    **dict.fromkeys(("kg", "kilogram", "kilogramy", "kilogramów", "l", "litr", "litry", "litrów"), (1000, False)),
+    **dict.fromkeys(("łyżka", "łyżki", "łyżek"), (15, True)),
+    **dict.fromkeys(("łyżeczka", "łyżeczki", "łyżeczek"), (5, True)),
+    **dict.fromkeys(("szklanka", "szklanki", "szklanek"), (250, True)),
+}
+
+
+def _ingredient_grams(quantity: float | None, unit: str | None) -> tuple[float | None, bool]:
+    if not quantity or not unit:
+        return None, False
+    found = UNIT_GRAMS.get(unit.strip().lower())
+    if found is None:
+        return None, False
+    per_unit, estimated = found
+    return round(quantity * per_unit, 1), estimated
 
 
 class DietNotFound(Exception):
@@ -232,6 +254,35 @@ class DietTrackingService(BaseService):
                 )
             )
         return options
+
+    def recipe_ingredients(self, recipe_id: UUID) -> list[DietRecipeIngredient]:
+        recipe = self.session.execute(
+            sa.select(RecipeModel)
+            .where(RecipeModel.group_id == self.group_id, RecipeModel.id == recipe_id)
+            .options(sa.orm.lazyload("*"), sa.orm.selectinload(RecipeModel.recipe_ingredient))
+        ).scalar_one_or_none()
+        if recipe is None:
+            raise DietNotFound(f"recipe:{recipe_id}")
+
+        items = []
+        for ingredient in sorted(recipe.recipe_ingredient, key=lambda i: i.position or 0):
+            food = ingredient.food.name if ingredient.food else ""
+            name = (food or ingredient.note or ingredient.original_text or "").strip()
+            if not name:
+                continue  # a section heading
+            unit = ingredient.unit.name if ingredient.unit else None
+            grams, estimated = _ingredient_grams(ingredient.quantity, unit)
+            items.append(
+                DietRecipeIngredient(
+                    name=name,
+                    text=(ingredient.original_text or name).strip(),
+                    quantity=ingredient.quantity,
+                    unit=unit,
+                    grams=grams,
+                    estimated=estimated,
+                )
+            )
+        return items
 
     def _recipe(self, recipe_id: UUID) -> DietRecipeOption:
         for option in self.recipe_options():

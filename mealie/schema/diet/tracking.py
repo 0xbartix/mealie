@@ -237,6 +237,17 @@ class DietDiaryFromPlanResult(MealieModel):
     skipped: int
 
 
+class DietRecipeIngredient(MealieModel):
+    """One ingredient of a recipe, as needed for the whole recipe (all its servings)."""
+
+    name: str
+    text: str
+    quantity: float | None = None
+    unit: str | None = None
+    grams: float | None = None  # known or estimated weight (g or ml); None when it can't be told (e.g. "2 szt")
+    estimated: bool = False  # grams come from a spoon or glass measure
+
+
 class DietRecipeOption(MealieModel):
     id: UUID4
     name: str

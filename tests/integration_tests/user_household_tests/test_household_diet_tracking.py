@@ -332,3 +332,16 @@ def test_diary_from_plan_survives_saving_the_plan_again(api_client: TestClient, 
     assert again == {"created": 0, "skipped": 3}
     day = api_client.get(f"{BASE}/diary", params={"person_id": ania, "date": "2026-11-10"}, headers=unique_user.token)
     assert len(day.json()["entries"]) == 3
+
+
+def test_recipe_ingredients_for_the_freezer(api_client: TestClient, unique_user: TestUser):
+    recipe = gulasz(api_client, unique_user)
+    url = f"{BASE}/recipes/{recipe['id']}/ingredients"
+    items = api_client.get(url, headers=unique_user.token).json()
+    assert [(i["name"], i["grams"], i["estimated"]) for i in items] == [
+        ("ryż biały", 100, False),
+        ("oliwa", 30, True),
+        ("cebula", None, False),
+    ]
+    missing = f"{BASE}/recipes/00000000-0000-0000-0000-000000000000/ingredients"
+    assert api_client.get(missing, headers=unique_user.token).status_code == 404

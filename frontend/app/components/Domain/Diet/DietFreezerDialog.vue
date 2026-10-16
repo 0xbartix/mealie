@@ -35,8 +35,37 @@
         <BaseCardSectionTitle :title="$t('diet.changes')" size="small">
           {{ $t("diet.changes-description") }}
         </BaseCardSectionTitle>
+        <div v-if="ingredients.length" class="mb-3">
+          <div class="text-caption text-medium-emphasis mb-1">
+            {{ $t("diet.recipe-ingredients-hint") }}
+          </div>
+          <div class="d-flex flex-wrap ga-1">
+            <v-menu v-for="(ingredient, i) in ingredients" :key="i">
+              <template #activator="{ props: menuProps }">
+                <v-chip v-bind="menuProps" size="small" variant="outlined">
+                  {{ ingredient.text }}
+                </v-chip>
+              </template>
+              <v-list density="compact">
+                <v-list-item :title="$t('diet.ingredient-skipped')" @click="fromIngredient(ingredient, 'skipped')" />
+                <v-list-item :title="$t('diet.ingredient-less')" @click="fromIngredient(ingredient, 'less')" />
+                <v-list-item :title="$t('diet.ingredient-swapped')" @click="fromIngredient(ingredient, 'swapped')" />
+              </v-list>
+            </v-menu>
+          </div>
+        </div>
         <div v-for="(change, index) in changes" :key="index" class="d-flex flex-wrap align-center ga-2 mb-2">
-          <v-select v-model="change.kind" :items="kinds" density="compact" hide-details style="max-width: 170px" />
+          <span v-if="change.ingredient" class="text-caption text-medium-emphasis w-100">
+            {{ $t(change.less ? "diet.from-recipe-less" : "diet.from-recipe", { text: change.ingredient }) }}
+          </span>
+          <v-select
+            :model-value="change.kind"
+            :items="kinds"
+            density="compact"
+            hide-details
+            style="max-width: 190px"
+            @update:model-value="changeKind(change, $event)"
+          />
           <template v-if="change.kind === 'swap'">
             <v-btn variant="outlined" size="small" @click="pick(index, 'replaced')">
               {{ change.replacedName || $t("diet.pick-product") }}
@@ -194,7 +223,7 @@
       <v-card>
         <v-card-title>{{ $t("diet.pick-product") }}</v-card-title>
         <v-card-text>
-          <DietProductPicker v-if="pickerOpen" @select="picked" />
+          <DietProductPicker v-if="pickerOpen" :initial-query="pickQuery" @select="picked" />
         </v-card-text>
       </v-card>
     </v-dialog>
@@ -212,6 +241,7 @@ import type {
   DietMacros,
   DietModificationKind,
   DietProductOut,
+  DietRecipeIngredient,
   DietRecipeOption,
 } from "~/lib/api/types/diet";
 
@@ -229,6 +259,9 @@ interface ChangeRow {
   replacedProductId: string | null;
   replacedName: string;
   replacedGrams: number | null;
+  ingredient?: string; // the recipe line this change is about
+  less?: boolean; // "used less": the grams are how much less
+  pieces?: number | null; // e.g. "2 szt" – turned into grams once a product with a portion weight is picked
 }
 
 function today() {
@@ -237,6 +270,7 @@ function today() {
 }
 
 const recipes = ref<DietRecipeOption[]>([]);
+const ingredients = ref<DietRecipeIngredient[]>([]);
 const recipeId = ref<string | null>(null);
 const frozenOn = ref(today());
 const servings = ref<number>(4);
@@ -276,22 +310,72 @@ function addChange() {
 
 // product picker for a change row
 const pickerOpen = ref(false);
+const pickQuery = ref("");
 const pickTarget = ref<{ index: number; field: "product" | "replaced" } | null>(null);
-function pick(index: number, field: "product" | "replaced") {
+function pick(index: number, field: "product" | "replaced", query = "") {
   pickTarget.value = { index, field };
+  pickQuery.value = query;
   pickerOpen.value = true;
+}
+
+// a change that starts from a recipe ingredient: amounts are for the servings cooked, not the recipe's
+function fromIngredient(ingredient: DietRecipeIngredient, mode: "skipped" | "less" | "swapped") {
+  const recipe = recipes.value.find(r => r.id === recipeId.value);
+  const scale = recipe?.servings ? (num(servings.value) ?? recipe.servings) / recipe.servings : 1;
+  const grams = ingredient.grams ? Math.round(ingredient.grams * scale) : null;
+  changes.value.push({
+    kind: mode === "swapped" ? "swap" : "remove",
+    productId: null,
+    productName: "",
+    grams: mode === "less" ? null : grams,
+    replacedProductId: null,
+    replacedName: "",
+    replacedGrams: mode === "swapped" ? grams : null,
+    ingredient: ingredient.text,
+    less: mode === "less",
+    pieces: !ingredient.grams && ingredient.quantity ? ingredient.quantity * scale : null,
+  });
+  pick(changes.value.length - 1, mode === "swapped" ? "replaced" : "product", ingredient.name);
+}
+
+// switching to "swapped" keeps what was picked as the replaced product, and back again
+function changeKind(row: ChangeRow, kind: DietModificationKind) {
+  if (kind === "swap" && row.kind !== "swap" && !row.replacedProductId) {
+    row.replacedProductId = row.productId;
+    row.replacedName = row.productName;
+    row.replacedGrams = row.grams;
+    row.productId = null;
+    row.productName = "";
+  }
+  else if (kind !== "swap" && row.kind === "swap" && !row.productId) {
+    row.productId = row.replacedProductId;
+    row.productName = row.replacedName;
+    row.grams = row.replacedGrams;
+  }
+  row.kind = kind;
+  row.less = false;
 }
 function picked(product: DietProductOut) {
   const target = pickTarget.value;
   const row = target ? changes.value[target.index] : undefined;
   if (target && row) {
+    const fromPieces = row.pieces && product.portionGrams ? Math.round(row.pieces * product.portionGrams) : null;
     if (target.field === "product") {
       row.productId = product.id;
       row.productName = product.name;
+      if (row.grams === null && !row.less) {
+        row.grams = fromPieces;
+      }
     }
     else {
       row.replacedProductId = product.id;
       row.replacedName = product.name;
+      if (row.replacedGrams === null) {
+        row.replacedGrams = fromPieces;
+      }
+      if (row.grams === null) {
+        row.grams = row.replacedGrams;
+      }
     }
   }
   pickerOpen.value = false;
@@ -365,10 +449,16 @@ watch(manual, (value) => {
   }
 });
 
-watch(recipeId, (id) => {
+watch(recipeId, async (id) => {
+  ingredients.value = [];
   const recipe = recipes.value.find(r => r.id === id);
-  if (recipe) {
-    servings.value = recipe.servings;
+  if (!recipe) {
+    return;
+  }
+  servings.value = recipe.servings;
+  const { data } = await api.diet.recipeIngredients(recipe.id);
+  if (recipeId.value === id) {
+    ingredients.value = data ?? [];
   }
 });
 

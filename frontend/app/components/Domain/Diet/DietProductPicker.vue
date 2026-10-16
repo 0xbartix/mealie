@@ -10,7 +10,8 @@
         density="compact"
         clearable
         autofocus
-        @keyup.enter="searchOnline"
+        :loading="searching"
+        @keydown.enter.prevent="searchNow"
       />
       <v-btn icon variant="tonal" color="primary" :title="$t('diet.scan-barcode')" @click="scanner = true">
         <v-icon>{{ mdiBarcodeScan }}</v-icon>
@@ -50,9 +51,7 @@
     </v-list>
 
     <div class="d-flex flex-wrap ga-2 align-center">
-      <v-btn variant="text" size="small" :loading="searching" :disabled="!query || query.trim().length < 2" @click="searchOnline">
-        {{ $t("diet.search-open-food-facts") }}
-      </v-btn>
+      <span v-if="searching" class="text-caption text-medium-emphasis">{{ $t("diet.searching") }}</span>
       <v-btn variant="text" size="small" :prepend-icon="$globals.icons.createAlt" @click="openForm()">
         {{ $t("diet.new-product") }}
       </v-btn>
@@ -73,6 +72,7 @@ import { useUserApi } from "~/composables/api";
 import { alert } from "~/composables/use-toast";
 import type { DietOffProduct, DietProductOut } from "~/lib/api/types/diet";
 
+const props = defineProps<{ initialQuery?: string }>();
 const emit = defineEmits<{ select: [product: DietProductOut] }>();
 
 const api = useUserApi();
@@ -112,17 +112,31 @@ async function loadLocal() {
   products.value = data ?? [];
 }
 
-async function searchOnline() {
-  const q = (query.value || "").trim();
-  if (q.length < 2) {
-    return;
-  }
+// searches as you type; only the newest answer counts when an older, slower one arrives later
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let searchRun = 0;
+
+async function searchOnline(q: string) {
+  const current = ++searchRun;
   searching.value = true;
   const { data } = await api.diet.searchProducts(q);
+  if (current !== searchRun) {
+    return;
+  }
   searching.value = false;
   searched.value = true;
   offResults.value = data?.off ?? [];
   offUnavailable.value = !!data?.offUnavailable;
+}
+
+function searchNow() {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+  }
+  const q = (query.value || "").trim();
+  if (q.length >= 2) {
+    searchOnline(q);
+  }
 }
 
 async function pickOff(code: string) {
@@ -166,13 +180,26 @@ function created(product: DietProductOut) {
   emit("select", product);
 }
 
-watch(query, () => {
+watch(query, (value) => {
+  if (searchTimer) {
+    clearTimeout(searchTimer);
+  }
+  searchRun++; // drop answers to what was typed before
+  searching.value = false;
   offResults.value = [];
   searched.value = false;
   offUnavailable.value = false;
+  if ((value || "").trim().length >= 2) {
+    searchTimer = setTimeout(searchNow, 450);
+  }
 });
 
-onMounted(loadLocal);
+onMounted(() => {
+  loadLocal();
+  if (props.initialQuery) {
+    query.value = props.initialQuery; // searches right away, e.g. for a recipe ingredient
+  }
+});
 </script>
 
 <style scoped>

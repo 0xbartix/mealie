@@ -44,6 +44,7 @@ from .tracking import (
     DietProductSearch,
     DietProductSource,
     DietProductUnit,
+    DietRecipeIngredient,
     DietRecipeOption,
 )
 
@@ -90,5 +91,6 @@ __all__ = [
     "DietProductSearch",
     "DietProductSource",
     "DietProductUnit",
+    "DietRecipeIngredient",
     "DietRecipeOption",
 ]

@@ -20,6 +20,7 @@ from mealie.schema.diet.tracking import (
     DietProductCreate,
     DietProductOut,
     DietProductSearch,
+    DietRecipeIngredient,
     DietRecipeOption,
 )
 from mealie.schema.response.responses import ErrorResponse
@@ -78,6 +79,10 @@ class DietTrackingController(BaseUserController):
     @router.get("/recipes", response_model=list[DietRecipeOption])
     def recipe_options(self):
         return self.service.recipe_options()
+
+    @router.get("/recipes/{recipe_id}/ingredients", response_model=list[DietRecipeIngredient])
+    def recipe_ingredients(self, recipe_id: UUID):
+        return self._run(self.service.recipe_ingredients, recipe_id)
 
     # ---------------------------------------------------------------- freezer
 

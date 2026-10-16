@@ -1,9 +1,9 @@
 """
 Small client for Open Food Facts (https://world.openfoodfacts.org), the open food products database.
 
-Search by name uses the classic search on the Polish site, which ranks Polish products well but is
-rate limited (about 10 requests a minute); when it fails, the newer search service is used instead.
-Barcode lookups use the product API. Results are cached in memory.
+Search by name uses the search service (fast, searched as you type); the classic search on the Polish site
+is only a fallback – it is rate limited (about 10 requests a minute) and often answers 503. Products with a
+Polish barcode (590…) are listed first. Barcode lookups use the product API. Results are cached in memory.
 """
 
 import re
@@ -104,24 +104,27 @@ class OpenFoodFactsClient:
             return cached[1]
 
         try:
+            # "pl,en": many Polish products keep their Polish name in the main (English) field
+            data = self._get(SEARCH_SERVICE, {"q": query, "page_size": 50, "langs": "pl,en", "fields": FIELDS})
+            raw_products = data.get("hits") or []
+        except OffUnavailable as e:
+            logger.info(f"Open Food Facts search service failed ({e}), using the classic search")
             data = self._get(
                 CLASSIC_SEARCH,
                 {
                     "search_terms": query,
                     "search_simple": 1,
                     "json": 1,
-                    "page_size": limit,
+                    "page_size": 50,
                     "sort_by": "unique_scans_n",
                     "fields": FIELDS,
                 },
             )
             raw_products = data.get("products") or []
-        except OffUnavailable as e:
-            logger.info(f"Open Food Facts classic search failed ({e}), using the search service")
-            data = self._get(SEARCH_SERVICE, {"q": query, "page_size": limit, "langs": "pl", "fields": FIELDS})
-            raw_products = data.get("hits") or []
 
         products = [p for p in (parse_product(raw) for raw in raw_products) if p is not None]
+        products.sort(key=lambda p: not p.code.startswith("590"))  # stable: keeps the search order otherwise
+        products = products[:limit]
         self._cache[key] = (time.time(), products)
         while len(self._cache) > CACHE_SIZE:
             self._cache.popitem(last=False)

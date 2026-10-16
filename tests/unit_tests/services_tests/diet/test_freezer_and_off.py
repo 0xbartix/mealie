@@ -69,3 +69,47 @@ def test_parse_off_product_kj_fallback_and_rejects():
     assert from_kj is not None and from_kj.kcal == 100 and from_kj.brand == "Marka" and from_kj.unit == "g"
     assert parse_product({"code": "1", "product_name": "Bez kalorii", "nutriments": {}}) is None
     assert parse_product({"code": "1", "nutriments": {"energy-kcal_100g": 10}}) is None
+
+
+def test_search_uses_the_search_service_and_lists_polish_products_first(monkeypatch):
+    from mealie.services.diet import off_client as oc
+
+    calls: list[str] = []
+
+    def fake_get(self, url, params=None):
+        calls.append(url)
+        hits = [
+            {"code": "4000000000001", "product_name": "Skyr DE", "nutriments": {"energy-kcal_100g": 60}},
+            {"code": "5900000000001", "product_name": "Skyr PL", "nutriments": {"energy-kcal_100g": 64}},
+            {"code": "3000000000001", "product_name": "No kcal", "nutriments": {}},
+        ]
+        return {"hits": hits}
+
+    monkeypatch.setattr(oc.OpenFoodFactsClient, "_get", fake_get)
+    found = oc.OpenFoodFactsClient().search("skyr")
+    assert calls == [oc.SEARCH_SERVICE]
+    assert [p.name for p in found] == ["Skyr PL", "Skyr DE"]
+
+
+def test_search_falls_back_to_the_classic_search(monkeypatch):
+    from mealie.services.diet import off_client as oc
+
+    def fake_get(self, url, params=None):
+        if url == oc.SEARCH_SERVICE:
+            raise oc.OffUnavailable("down")
+        return {
+            "products": [{"code": "5900000000002", "product_name": "Mleko", "nutriments": {"energy-kcal_100g": 60}}]
+        }
+
+    monkeypatch.setattr(oc.OpenFoodFactsClient, "_get", fake_get)
+    assert [p.name for p in oc.OpenFoodFactsClient().search("mleko")] == ["Mleko"]
+
+
+def test_ingredient_grams():
+    from mealie.services.diet.tracking_service import _ingredient_grams
+
+    assert _ingredient_grams(100, "g") == (100, False)
+    assert _ingredient_grams(1.5, "kg") == (1500, False)
+    assert _ingredient_grams(2, "łyżki") == (30, True)
+    assert _ingredient_grams(1, "szt") == (None, False)
+    assert _ingredient_grams(None, "g") == (None, False)
