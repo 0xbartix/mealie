@@ -174,6 +174,7 @@ class DietDiaryKind(StrEnum):
 
 class DietAmountUnit(StrEnum):
     grams = "g"
+    millilitres = "ml"  # stored for liquids; on input it means the same as grams
     portion = "portion"
     mold = "mold"
 

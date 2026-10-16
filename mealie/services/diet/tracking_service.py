@@ -423,8 +423,18 @@ class DietTrackingService(BaseService):
             else:
                 grams = data.amount
             nutrition = _macros(product).scaled(grams / 100)
-            unit = DietAmountUnit.portion if data.amount_unit is DietAmountUnit.portion else DietAmountUnit.grams
-            values.update(product_id=product.id, amount_unit=unit.value, name=product.name)
+            if data.amount_unit is DietAmountUnit.portion:
+                unit = DietAmountUnit.portion
+            else:
+                unit = DietAmountUnit.millilitres if product.unit == "ml" else DietAmountUnit.grams
+            name = product.name
+            if unit is DietAmountUnit.portion:
+                # "Chleb żytni (1 kromka = 35 g)" – the diary then only needs to show "2 ×"
+                portion = product.portion_name or "porcja"
+                if not re.search(r"\d\s*(g|ml)\b", portion, re.IGNORECASE):  # e.g. OFF's "1 szklanka (250 ml)"
+                    portion = f"{portion} = {product.portion_grams:g} {product.unit}"
+                name = f"{product.name} ({portion})"
+            values.update(product_id=product.id, amount_unit=unit.value, name=name[:255])
 
         elif data.kind is DietDiaryKind.recipe:
             if data.recipe_id is None:

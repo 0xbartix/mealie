@@ -61,7 +61,13 @@ const form = ref<InstanceType<typeof DietSettingsForm> | null>(null);
 const sharesOk = computed(() => form.value?.sharesOk ?? true);
 
 function toDraft(value: DietSettingsOut): DietSettingsUpdate {
-  return JSON.parse(JSON.stringify({ persons: value.persons, cookingDays: value.cookingDays, mealSlots: value.mealSlots }));
+  return JSON.parse(JSON.stringify({
+    persons: value.persons,
+    cookingDays: value.cookingDays,
+    mealSlots: value.mealSlots,
+    eatNextDay: value.eatNextDay ?? false,
+    shoppingList: value.shoppingList ?? "period",
+  }));
 }
 
 onMounted(async () => {

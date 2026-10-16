@@ -27,6 +27,7 @@
     "@vueuse/core": "^12.7.0",
     "@vueuse/shared": "^14.3.0",
     "axios": "^1.8.1",
+    "barcode-detector": "3.2.2",
     "date-fns": "^4.1.0",
     "dompurify": "^3.4.7",
     "fuse.js": "^7.1.0",

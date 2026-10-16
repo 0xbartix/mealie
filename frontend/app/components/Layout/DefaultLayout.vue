@@ -94,6 +94,7 @@
 </template>
 
 <script setup lang="ts">
+import { mdiScaleBathroom, mdiSnowflake } from "@mdi/js";
 import { useLoggedInState } from "~/composables/use-logged-in-state";
 import type { SideBarLink } from "~/types/application-types";
 import { useGroupSelf } from "~/composables/use-groups";
@@ -246,6 +247,18 @@ const topLinks = computed<SideBarLink[]>(() => [
     icon: $globals.icons.potSteam,
     title: i18n.t("diet.diet-plan"),
     to: "/household/diet",
+    restricted: true,
+  },
+  {
+    icon: mdiScaleBathroom,
+    title: i18n.t("diet.counter"),
+    to: "/household/licznik",
+    restricted: true,
+  },
+  {
+    icon: mdiSnowflake,
+    title: i18n.t("diet.freezer"),
+    to: "/household/zamrazarka",
     restricted: true,
   },
   {

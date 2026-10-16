@@ -4,7 +4,7 @@
       {{ $t("diet.no-persons") }}
     </v-alert>
 
-    <v-row dense align="center" class="mb-2">
+    <v-row density="compact" align="center" class="mb-2">
       <v-col cols="6" sm="3">
         <v-text-field v-model="startDate" type="date" :label="$t('diet.start-date')" density="compact" hide-details />
       </v-col>
@@ -31,6 +31,15 @@
       <BaseButton v-if="savedCount !== null" secondary to="/household/mealplan/planner/view" :icon="$globals.icons.calendarMultiselect">
         {{ $t("diet.open-planner") }}
       </BaseButton>
+      <BaseButton
+        v-for="list in shoppingLists"
+        :key="list.id"
+        secondary
+        :to="`/shopping-lists/${list.id}`"
+        :icon="$globals.icons.formatListCheck"
+      >
+        {{ list.name }}
+      </BaseButton>
     </div>
 
     <v-alert
@@ -50,11 +59,11 @@
           <v-icon size="small">
             {{ $globals.icons.potSteam }}
           </v-icon>
-          <span>{{ $t("diet.cooking-on", { date: formatDate(batch.startDate, true) }) }}</span>
+          <span>{{ $t("diet.cooking-on", { date: formatDate(batch.cookDate, true) }) }}</span>
           <span class="text-body-2 text-medium-emphasis">
             {{ batch.days === 1
-              ? $t("diet.for-one-day", { start: formatDate(batch.startDate) })
-              : $t("diet.for-days", { days: batch.days, start: formatDate(batch.startDate), end: formatDate(batch.endDate) }) }}
+              ? $t("diet.eating-one-day", { start: formatDate(batch.startDate) })
+              : $t("diet.eating-days", { days: batch.days, start: formatDate(batch.startDate), end: formatDate(batch.endDate) }) }}
           </span>
         </v-card-title>
         <v-divider />
@@ -120,7 +129,14 @@
 <script setup lang="ts">
 import { useUserApi } from "~/composables/api";
 import { alert } from "~/composables/use-toast";
-import type { DietPlanPreview, DietPlanRequest, DietPlanSlot, DietPlanTotals, DietSettingsOut } from "~/lib/api/types/diet";
+import type {
+  DietPlanPreview,
+  DietPlanRequest,
+  DietPlanSlot,
+  DietPlanTotals,
+  DietSettingsOut,
+  DietShoppingListRef,
+} from "~/lib/api/types/diet";
 
 const props = defineProps<{ settings: DietSettingsOut }>();
 
@@ -140,7 +156,8 @@ function addDays(iso: string, days: number) {
   return isoDate(date);
 }
 
-const startDate = ref(isoDate(new Date()));
+// when food is eaten from the day after cooking, a plan starting tomorrow makes today the first cooking day
+const startDate = ref(addDays(isoDate(new Date()), props.settings.eatNextDay ? 1 : 0));
 const endDate = ref(addDays(startDate.value, 13));
 function setLength(days: number) {
   endDate.value = addDays(startDate.value, days - 1);
@@ -152,6 +169,7 @@ const loading = ref(false);
 const saving = ref(false);
 const swapping = ref<string | null>(null);
 const savedCount = ref<number | null>(null);
+const shoppingLists = ref<DietShoppingListRef[]>([]);
 
 const activePersons = computed(() => (props.settings.persons ?? []).filter(p => p.active !== false));
 
@@ -278,12 +296,18 @@ async function save() {
     return;
   }
   savedCount.value = data.created;
-  alert.success(i18n.t("diet.saved-to-calendar", { created: data.created }));
+  shoppingLists.value = data.shoppingLists ?? [];
+  alert.success(
+    shoppingLists.value.length
+      ? i18n.t("diet.saved-with-lists", { created: data.created, lists: shoppingLists.value.length })
+      : i18n.t("diet.saved-to-calendar", { created: data.created }),
+  );
 }
 
 // batch and slot indexes of an old preview mean something else after the settings change
 watch([startDate, endDate, () => props.settings], () => {
   excluded.value = {};
+  shoppingLists.value = [];
   preview.value = null;
   savedCount.value = null;
 });

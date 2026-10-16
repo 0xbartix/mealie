@@ -10,7 +10,7 @@
       class="mb-3"
     >
       <v-card-text>
-        <v-row dense>
+        <v-row density="compact">
           <v-col cols="12" sm="4">
             <v-text-field v-model="person.name" :label="$t('diet.name')" density="compact" hide-details />
           </v-col>
@@ -72,11 +72,24 @@
     <BaseCardSectionTitle :title="$t('diet.cooking-days')">
       {{ $t("diet.cooking-days-description") }}
     </BaseCardSectionTitle>
-    <v-chip-group v-model="modelValue.cookingDays" multiple column selected-class="text-primary" class="mb-6">
+    <v-chip-group v-model="modelValue.cookingDays" multiple column selected-class="text-primary" class="mb-2">
       <v-chip v-for="day in weekDays" :key="day.value" :value="day.value" filter variant="outlined">
         {{ day.label }}
       </v-chip>
     </v-chip-group>
+    <v-radio-group v-model="modelValue.eatNextDay" density="compact" class="mb-6" hide-details>
+      <v-radio :value="false" :label="$t('diet.eat-same-day')" />
+      <v-radio :value="true" :label="$t('diet.eat-next-day')" />
+    </v-radio-group>
+
+    <BaseCardSectionTitle :title="$t('diet.shopping-list')">
+      {{ $t("diet.shopping-list-description") }}
+    </BaseCardSectionTitle>
+    <v-radio-group v-model="modelValue.shoppingList" density="compact" class="mb-6" hide-details>
+      <v-radio value="period" :label="$t('diet.shopping-list-period')" />
+      <v-radio value="batch" :label="$t('diet.shopping-list-batch')" />
+      <v-radio value="none" :label="$t('diet.shopping-list-none')" />
+    </v-radio-group>
 
     <BaseCardSectionTitle :title="$t('diet.meals-per-day')">
       {{ $t("diet.meals-per-day-description") }}

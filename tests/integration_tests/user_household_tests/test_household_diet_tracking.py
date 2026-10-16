@@ -199,6 +199,10 @@ def test_diary_adds_every_kind_and_tracks_freezer(api_client: TestClient, unique
     assert (grams["kcal"], grams["protein"]) == (185, 6.5)
     portion = add(mealType="breakfast", kind="product", productId=oats["id"], amount=2, amountUnit="portion")
     assert portion["kcal"] == 296  # 2 × 40 g
+    assert portion["name"] == "Płatki owsiane (1 garść = 40 g)"
+    milk = product(api_client, unique_user, "Mleko", 60, 3.2, 3.2, 4.7, unit="ml")
+    drink = add(date="2026-10-18", mealType="snack", kind="product", productId=milk["id"], amount=250, amountUnit="g")
+    assert (drink["amountUnit"], drink["kcal"], drink["name"]) == ("ml", 150, "Mleko")
     meal = add(mealType="lunch", kind="recipe", recipeId=recipe["id"], amount=1.5)
     assert meal["kcal"] == 870
     frozen = add(mealType="dinner", kind="freezer", batchId=batch["id"], moldIndex=0, amount=1.5)
