@@ -128,6 +128,15 @@ def entry_fingerprint(entry: ReadPlanEntry) -> dict:
     }
 
 
+FINGERPRINT_KEYS = ("id", "date", "type", "recipe", "title")
+
+
+def tracked_matches(tracked: dict, entry: ReadPlanEntry) -> bool:
+    """Whether a remembered planner entry still is the meal plan entry the planner wrote."""
+    fingerprint = entry_fingerprint(entry)
+    return all(tracked.get(key) == fingerprint[key] for key in FINGERPRINT_KEYS)
+
+
 def _fmt(value: float) -> str:
     return f"{round(value, 1):g}"
 
@@ -293,8 +302,8 @@ class DietService(BaseService):
                 query_filter=f"date >= {request.start_date} AND date <= {request.end_date}",
             )
         ).items
-        current = {e.id: entry_fingerprint(e) for e in in_period}
-        stale = {t["id"] for t in tracked if current.get(t["id"]) == t}
+        current = {e.id: e for e in in_period}
+        stale = {t["id"] for t in tracked if t["id"] in current and tracked_matches(t, current[t["id"]])}
         removed = 0
         created: list[dict] = []
         try:
@@ -344,13 +353,15 @@ class DietService(BaseService):
                                 user_id=self.user.id,
                             )
                         )
-                        created.append(entry_fingerprint(entry))
+                        created.append(
+                            {**entry_fingerprint(entry), "portions": {p.person_id: p.portions for p in slot.portions}}
+                        )
         except Exception:
             self.repos.session.rollback()
             raise
         finally:
             # record progress even after a failure, so entries written so far are still replaced next time
-            deleted = {t["id"] for t in tracked if current.get(t["id"]) == t} - stale
+            deleted = {t["id"] for t in tracked if t["id"] in current and tracked_matches(t, current[t["id"]])} - stale
             horizon = (datetime.now(UTC).date() - timedelta(days=PRUNE_AFTER_DAYS)).isoformat()
             kept = [t for t in tracked if t["id"] not in deleted and t["date"] >= horizon]
             model = self._settings_model()
@@ -358,6 +369,10 @@ class DietService(BaseService):
             self.repos.session.commit()
 
         return DietPlanSaveResult(created=len(created), removed=removed)
+
+    def tracked_entries(self) -> list[dict]:
+        """Meal plan entries the planner wrote, with each person's portions."""
+        return [t for t in self._settings_model().generated_entry_ids or [] if isinstance(t, dict)]
 
     def _settings_model(self) -> HouseholdDietSettings:
         self.get_settings()
