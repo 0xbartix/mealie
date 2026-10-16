@@ -99,20 +99,31 @@
       </v-window-item>
 
       <v-window-item value="products">
-        <div class="d-flex ga-2 mb-2">
+        <div class="d-flex ga-2 mb-2 align-center">
           <v-text-field
             v-model="productSearch"
             :prepend-inner-icon="$globals.icons.search"
             :label="$t('diet.search-product')"
+            :hint="$t('diet.search-hint')"
+            persistent-hint
+            :loading="offSearching"
             density="compact"
-            hide-details
             clearable
+            @keydown.enter.prevent="searchNow"
           />
+          <v-btn icon variant="tonal" color="primary" :title="$t('diet.scan-barcode')" @click="scannerOpen = true">
+            <v-icon>{{ mdiBarcodeScan }}</v-icon>
+          </v-btn>
+        </div>
+        <div class="d-flex justify-end mb-2">
           <BaseButton create @click="editProduct(null)">
             {{ $t("diet.new-product") }}
           </BaseButton>
         </div>
-        <p class="text-caption text-medium-emphasis mb-2">
+        <p v-if="productsLoaded && !products.length && !productSearch" class="text-medium-emphasis mb-2">
+          {{ $t("diet.my-products-empty") }}
+        </p>
+        <p v-else class="text-caption text-medium-emphasis mb-2">
           {{ $t("diet.my-products-hint") }}
         </p>
         <v-list density="compact">
@@ -126,7 +137,35 @@
               </v-btn>
             </template>
           </v-list-item>
+
+          <v-list-subheader v-if="offResults.length">
+            {{ $t("diet.add-from-open-food-facts") }}
+          </v-list-subheader>
+          <v-list-item
+            v-for="found in offResults"
+            :key="found.code"
+            :title="found.name"
+            :subtitle="productLine(found)"
+            :disabled="savingCode === found.code"
+            @click="addFromOff(found.code, found.name)"
+          >
+            <template #append>
+              <v-progress-circular v-if="savingCode === found.code" size="16" width="2" indeterminate />
+              <v-icon v-else color="primary">
+                {{ $globals.icons.createAlt }}
+              </v-icon>
+            </template>
+          </v-list-item>
         </v-list>
+        <p v-if="offSearching" class="text-caption text-medium-emphasis">
+          {{ $t("diet.searching") }}
+        </p>
+        <p v-else-if="offUnavailable" class="text-caption text-warning">
+          {{ $t("diet.off-unavailable") }}
+        </p>
+        <p v-else-if="offSearched && !offResults.length && !filteredProducts.length" class="text-caption text-medium-emphasis">
+          {{ $t("diet.off-nothing") }}
+        </p>
       </v-window-item>
     </v-window>
 
@@ -138,16 +177,33 @@
       :meal-type="addMeal"
       @added="load"
     />
-    <DietProductForm v-model="productFormOpen" :product="productToEdit" @saved="loadProducts" />
+    <DietProductForm
+      v-model="productFormOpen"
+      :product="productToEdit"
+      :initial-name="formName"
+      :initial-barcode="formBarcode"
+      @saved="loadProducts"
+    />
+    <DietBarcodeScanner v-model="scannerOpen" @detected="addByBarcode" />
   </v-container>
 </template>
 
 <script setup lang="ts">
+import { mdiBarcodeScan } from "@mdi/js";
+import DietBarcodeScanner from "~/components/Domain/Diet/DietBarcodeScanner.vue";
 import DietDiaryAddDialog from "~/components/Domain/Diet/DietDiaryAddDialog.vue";
 import DietProductForm from "~/components/Domain/Diet/DietProductForm.vue";
 import { useUserApi } from "~/composables/api";
+import { useDietProductSearch } from "~/composables/use-diet-product-search";
 import { alert } from "~/composables/use-toast";
-import type { DietDiaryDay, DietDiaryEntryOut, DietProductOut, DietSettingsOut, MealType } from "~/lib/api/types/diet";
+import type {
+  DietDiaryDay,
+  DietDiaryEntryOut,
+  DietOffProduct,
+  DietProductOut,
+  DietSettingsOut,
+  MealType,
+} from "~/lib/api/types/diet";
 
 definePageMeta({
   middleware: ["auth"],
@@ -293,6 +349,20 @@ const products = ref<DietProductOut[]>([]);
 const productSearch = ref("");
 const productFormOpen = ref(false);
 const productToEdit = ref<DietProductOut | null>(null);
+const productsLoaded = ref(false);
+const formName = ref("");
+const formBarcode = ref("");
+const scannerOpen = ref(false);
+const savingCode = ref<string | null>(null);
+// typing here also searches the Open Food Facts database; a result is one click from "my products"
+const {
+  results: offResults,
+  unavailable: offUnavailable,
+  searching: offSearching,
+  searched: offSearched,
+  searchNow,
+  forget,
+} = useDietProductSearch(productSearch);
 
 function fold(text: string) {
   return text.toLowerCase().replaceAll("ł", "l").normalize("NFKD").replace(/[̀-ͯ]/g, "");
@@ -301,16 +371,46 @@ const filteredProducts = computed(() => {
   const words = fold(productSearch.value || "").split(/\s+/).filter(Boolean);
   return products.value.filter(p => words.every(w => fold(`${p.name} ${p.brand ?? ""}`).includes(w)));
 });
-function productLine(p: DietProductOut) {
+function productLine(p: DietProductOut | DietOffProduct) {
   return `${p.brand ? `${p.brand} · ` : ""}${Math.round(p.kcal)} kcal / 100 ${p.unit} · B ${p.protein} · T ${p.fat} · W ${p.carbs}`;
 }
 async function loadProducts() {
   const { data } = await api.diet.listProducts();
   products.value = data ?? [];
+  productsLoaded.value = true;
 }
-function editProduct(product: DietProductOut | null) {
+function editProduct(product: DietProductOut | null, name = "", barcode = "") {
   productToEdit.value = product;
+  formName.value = name;
+  formBarcode.value = barcode;
   productFormOpen.value = true;
+}
+async function addFromOff(code: string, name: string) {
+  savingCode.value = code;
+  const { data } = await api.diet.saveOffProduct(code);
+  savingCode.value = null;
+  if (!data) {
+    alert.error(i18n.t("diet.off-unavailable"));
+    return;
+  }
+  forget(code);
+  alert.success(i18n.t("diet.product-added", { name }));
+  await loadProducts();
+}
+async function addByBarcode(code: string) {
+  const { data, error } = await api.diet.productByBarcode(code);
+  if (data) {
+    alert.success(i18n.t("diet.product-added", { name: data.name }));
+    await loadProducts();
+    return;
+  }
+  if (error?.response?.status === 404) {
+    alert.info(i18n.t("diet.barcode-not-found"));
+    editProduct(null, "", code);
+  }
+  else {
+    alert.error(i18n.t("diet.off-unavailable"));
+  }
 }
 async function deleteProduct(id: string) {
   await api.diet.deleteProduct(id);

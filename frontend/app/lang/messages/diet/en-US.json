@@ -153,5 +153,8 @@
   "ingredient-less": "Used less",
   "ingredient-swapped": "Swapped for another",
   "from-recipe": "From the recipe: {text}",
-  "from-recipe-less": "From the recipe: {text} – enter how many grams less"
+  "from-recipe-less": "From the recipe: {text} – enter how many grams less",
+  "add-from-open-food-facts": "From Open Food Facts – click to add to your products",
+  "product-added": "Added to your products: {name}",
+  "my-products-empty": "No saved products yet. Type a name above – I'll find it in Open Food Facts – or scan a barcode."
 }

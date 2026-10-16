@@ -157,5 +157,8 @@
   "ingredient-less": "Dałem mniej",
   "ingredient-swapped": "Zamieniłem na inny",
   "from-recipe": "Z przepisu: {text}",
-  "from-recipe-less": "Z przepisu: {text} – wpisz, o ile gramów mniej"
+  "from-recipe-less": "Z przepisu: {text} – wpisz, o ile gramów mniej",
+  "add-from-open-food-facts": "Z bazy Open Food Facts – kliknij, aby dodać do swoich produktów",
+  "product-added": "Dodano do Twoich produktów: {name}",
+  "my-products-empty": "Nie masz jeszcze zapisanych produktów. Wpisz nazwę powyżej – znajdę ją w bazie Open Food Facts – albo zeskanuj kod kreskowy."
 }

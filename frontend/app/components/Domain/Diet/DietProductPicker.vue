@@ -69,6 +69,7 @@ import { mdiBarcodeScan } from "@mdi/js";
 import DietBarcodeScanner from "./DietBarcodeScanner.vue";
 import DietProductForm from "./DietProductForm.vue";
 import { useUserApi } from "~/composables/api";
+import { useDietProductSearch } from "~/composables/use-diet-product-search";
 import { alert } from "~/composables/use-toast";
 import type { DietOffProduct, DietProductOut } from "~/lib/api/types/diet";
 
@@ -80,10 +81,7 @@ const i18n = useI18n();
 
 const query = ref("");
 const products = ref<DietProductOut[]>([]);
-const offResults = ref<DietOffProduct[]>([]);
-const offUnavailable = ref(false);
-const searching = ref(false);
-const searched = ref(false);
+const { results: offResults, unavailable: offUnavailable, searching, searched, searchNow } = useDietProductSearch(query);
 const saving = ref<string | null>(null);
 const scanner = ref(false);
 const form = ref(false);
@@ -110,33 +108,6 @@ function describe(product: DietProductOut | DietOffProduct) {
 async function loadLocal() {
   const { data } = await api.diet.listProducts();
   products.value = data ?? [];
-}
-
-// searches as you type; only the newest answer counts when an older, slower one arrives later
-let searchTimer: ReturnType<typeof setTimeout> | null = null;
-let searchRun = 0;
-
-async function searchOnline(q: string) {
-  const current = ++searchRun;
-  searching.value = true;
-  const { data } = await api.diet.searchProducts(q);
-  if (current !== searchRun) {
-    return;
-  }
-  searching.value = false;
-  searched.value = true;
-  offResults.value = data?.off ?? [];
-  offUnavailable.value = !!data?.offUnavailable;
-}
-
-function searchNow() {
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-  }
-  const q = (query.value || "").trim();
-  if (q.length >= 2) {
-    searchOnline(q);
-  }
 }
 
 async function pickOff(code: string) {
@@ -179,20 +150,6 @@ function created(product: DietProductOut) {
   products.value.push(product);
   emit("select", product);
 }
-
-watch(query, (value) => {
-  if (searchTimer) {
-    clearTimeout(searchTimer);
-  }
-  searchRun++; // drop answers to what was typed before
-  searching.value = false;
-  offResults.value = [];
-  searched.value = false;
-  offUnavailable.value = false;
-  if ((value || "").trim().length >= 2) {
-    searchTimer = setTimeout(searchNow, 450);
-  }
-});
 
 onMounted(() => {
   loadLocal();
